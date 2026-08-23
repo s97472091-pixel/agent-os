@@ -68,6 +68,9 @@ DEPRECATED_MEMORY_FIELDS: frozenset[str] = frozenset(
         "memory.repair_enabled",
         "memory.repair_interval_seconds",
         "memory.repair_max_items_per_tick",
+        # Daily-note size limits were removed (PR #111); no consumer reads them.
+        "memory.daily_note_max_chars",
+        "memory.daily_notes_total_max_chars",
     }
 )
 
