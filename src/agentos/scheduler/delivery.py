@@ -28,9 +28,14 @@ SCRIPT_HANDLER_KEY = "script_run"
 
 
 _WEBHOOK_TIMEOUT_SECONDS = 10.0
-_REPLY_DIRECTIVE_RE = re.compile(
-    r"\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\]\s*"
-)
+
+# Transient delivery retry policy. A successful run whose *delivery* hit a
+# transient error (429/502/503, timeout, DNS/network hiccup) should not be
+# reported as ``delivery_failed`` forever — retry with exponential backoff
+# before giving up. Permanent errors (auth/config-style) fail immediately.
+_TRANSIENT_MAX_RETRIES = 3
+_TRANSIENT_BACKOFF_SECONDS = (1.0, 2.0, 4.0)
+_REPLY_DIRECTIVE_RE = re.compile(r"\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\]\s*")
 
 
 def strip_reply_directives(text: str | None) -> str | None:
@@ -48,9 +53,7 @@ def validate_webhook_url(url: str) -> None:
     except ValueError as exc:
         raise ValueError(f"invalid webhook URL: {url!r}") from exc
     if parsed.scheme not in ("http", "https"):
-        raise ValueError(
-            f"webhook URL must use http or https scheme, got {parsed.scheme!r}"
-        )
+        raise ValueError(f"webhook URL must use http or https scheme, got {parsed.scheme!r}")
     if not parsed.hostname:
         raise ValueError(f"webhook URL is missing a hostname: {url!r}")
 
@@ -128,6 +131,45 @@ class DeliveryChain:
         self._channel_manager_ref = channel_manager_ref
         self._ws_emitter = ws_emitter
         self._session_forwarder = session_forwarder
+
+    @staticmethod
+    async def _retry_transient(
+        fn: Callable[[], Awaitable[Any]],
+        *,
+        job_id: str,
+    ) -> Any:
+        """Run ``fn`` with exponential-backoff retries on transient errors.
+
+        Error text is classified with ``scheduler.jobs.classify_error`` so
+        permanent failures (auth/config-style signatures such as 401/403 or
+        an invalid key) fail immediately, while transient ones (rate limits,
+        timeouts, 5xx, DNS/network issues) retry up to
+        ``_TRANSIENT_MAX_RETRIES`` times, sleeping ``_TRANSIENT_BACKOFF_SECONDS``
+        between attempts. Returns the first non-raising result; re-raises the
+        last error when every attempt is exhausted.
+        """
+        from agentos.scheduler.jobs import classify_error
+
+        last_error: Exception | None = None
+        for attempt in range(1, _TRANSIENT_MAX_RETRIES + 1):
+            try:
+                return await fn()
+            except Exception as exc:  # noqa: BLE001 - classification decides
+                last_error = exc
+                if classify_error(str(exc)) != "transient":
+                    raise
+                if attempt < _TRANSIENT_MAX_RETRIES:
+                    delay = _TRANSIENT_BACKOFF_SECONDS[attempt - 1]
+                    log.warning(
+                        "delivery.transient_retry",
+                        job_id=job_id,
+                        attempt=attempt,
+                        retry_delay_seconds=delay,
+                        error=str(exc)[:200],
+                    )
+                    await asyncio.sleep(delay)
+        assert last_error is not None
+        raise last_error
 
     @staticmethod
     def _is_script_job(job: CronJob) -> bool:
@@ -448,7 +490,11 @@ class DeliveryChain:
                     )
             else:
                 msg = OutgoingMessage(content=text, reply_to=channel_id or None)
-            await asyncio.wait_for(adapter.send(msg), timeout=30.0)
+
+            async def _send() -> None:
+                await asyncio.wait_for(adapter.send(msg), timeout=30.0)
+
+            await self._retry_transient(_send, job_id=job_id)
             log.info("delivery.channel_sent", job_id=job_id, channel=channel_name)
             return "delivered"
         except Exception as exc:
@@ -490,8 +536,12 @@ class DeliveryChain:
         }
         try:
             async with httpx.AsyncClient(timeout=_WEBHOOK_TIMEOUT_SECONDS) as client:
-                response = await client.post(url, json=payload, headers=headers)
-                response.raise_for_status()
+
+                async def _post() -> None:
+                    response = await client.post(url, json=payload, headers=headers)
+                    response.raise_for_status()
+
+                await self._retry_transient(_post, job_id=job_id)
             log.info("delivery.webhook_sent", job_id=job_id)
             return "delivered"
         except Exception as exc:
