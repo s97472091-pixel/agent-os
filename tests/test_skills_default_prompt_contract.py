@@ -50,6 +50,7 @@ DEFAULTS = (
         "pdf-toolkit",
         "poolsdotfun-token-launcher",
         "pptx",
+        "portfolio-rebalancer",
         "robinhood-agentic-trading",
         "robinhood-rwa-addresses",
         "seedance-2-prompt",
