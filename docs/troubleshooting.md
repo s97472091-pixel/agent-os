@@ -85,6 +85,13 @@ export OPENAI_API_KEY="sk-..."
 agentos configure provider --provider openai --api-key-env OPENAI_API_KEY
 ```
 
+**Windows CMD**
+
+```cmd
+set OPENAI_API_KEY=sk-...
+agentos configure provider --provider openai --api-key-env OPENAI_API_KEY
+```
+
 ## Router Dependency Problems
 
 If Pilot Router cannot load, AgentOS can still run with direct model

@@ -483,6 +483,13 @@ $env:OPENROUTER_API_KEY="sk-..."
 agentos onboard --provider openrouter --api-key-env OPENROUTER_API_KEY
 ```
 
+**Windows CMD**
+
+```cmd
+set OPENROUTER_API_KEY=sk-...
+agentos onboard --provider openrouter --api-key-env OPENROUTER_API_KEY
+```
+
 OpenRouter is just one example — you can use any supported provider
 and its own API key variable instead.
 
