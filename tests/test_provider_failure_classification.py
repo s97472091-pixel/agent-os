@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from agentos.engine.fallback import FallbackPolicy, ProviderErrorKind
+from agentos.engine.fallback import _FAILURE_KIND_MAP, FallbackPolicy, ProviderErrorKind
 from agentos.provider.failures import ProviderFailureKind, classify_provider_error
 
 
@@ -290,3 +290,60 @@ def test_new_transient_status_codes_match_via_text(message: str) -> None:
         classify_provider_error("openrouter", None, message=message)
         is ProviderFailureKind.PROVIDER_OVERLOADED
     )
+
+
+def test_failure_kind_map_covers_every_provider_failure_kind() -> None:
+    """Every ``ProviderFailureKind`` has an explicit fallback mapping.
+
+    Regression for #604: seven kinds silently fell through ``.get(..., UNKNOWN)``,
+    so transient ``MALFORMED_RESPONSE`` was never retried and ``INSUFFICIENT_CREDITS``
+    was treated as a generic unknown failure.
+    """
+
+    assert set(_FAILURE_KIND_MAP) == set(ProviderFailureKind)
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected"),
+    [
+        (ProviderFailureKind.MALFORMED_RESPONSE, ProviderErrorKind.TRANSPORT_TRANSIENT),
+        (ProviderFailureKind.INSUFFICIENT_CREDITS, ProviderErrorKind.AUTH_FAILURE),
+        (ProviderFailureKind.MODEL_NOT_FOUND, ProviderErrorKind.UNKNOWN),
+        (ProviderFailureKind.UNSUPPORTED_FEATURE, ProviderErrorKind.UNKNOWN),
+        (ProviderFailureKind.POLICY_REFUSAL, ProviderErrorKind.UNKNOWN),
+        (ProviderFailureKind.BAD_REQUEST, ProviderErrorKind.UNKNOWN),
+        (ProviderFailureKind.UNKNOWN, ProviderErrorKind.UNKNOWN),
+    ],
+)
+def test_newly_mapped_failure_kinds(kind: ProviderFailureKind, expected: ProviderErrorKind) -> None:
+    assert _FAILURE_KIND_MAP[kind] is expected
+
+
+def test_agent_fallback_retries_malformed_responses() -> None:
+    """Malformed (corrupted) response bodies are transient and retried."""
+
+    policy = FallbackPolicy(max_retries=2)
+
+    kind = policy.classify_error(
+        "malformed response",
+        provider_name="openrouter",
+        raw_code="",
+    )
+
+    assert kind is ProviderErrorKind.TRANSPORT_TRANSIENT
+    assert policy.should_retry(kind, attempt=0) is True
+
+
+def test_agent_fallback_does_not_retry_insufficient_credits() -> None:
+    """Insufficient credits is a billing/auth failure — fail fast, no retries."""
+
+    policy = FallbackPolicy(max_retries=2)
+
+    kind = policy.classify_error(
+        "insufficient credits",
+        provider_name="openrouter",
+        status_code=402,
+    )
+
+    assert kind is ProviderErrorKind.AUTH_FAILURE
+    assert policy.should_retry(kind, attempt=0) is False
