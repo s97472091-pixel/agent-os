@@ -283,8 +283,12 @@ async def retry_request(
     for attempt in range(max_retries + 1):
         try:
             resp = await func(*args, **kwargs)
-            if resp.status_code == 429:
-                retry_after = float(resp.headers.get("Retry-After", base_delay * (2**attempt)))
+            if resp.status_code == 429 and attempt < max_retries:
+                try:
+                    retry_after = float(resp.headers.get("Retry-After", base_delay * (2**attempt)))
+                except (TypeError, ValueError):
+                    # Non-numeric or HTTP-date Retry-After (RFC 7231) — fall back to backoff.
+                    retry_after = base_delay * (2**attempt)
                 log.warning("rate_limited", retry_after=retry_after, attempt=attempt)
                 await asyncio.sleep(retry_after)
                 continue

@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
+from agentos.channels._util import retry_request
 from agentos.channels.slack import SlackChannel
 from agentos.channels.types import OutgoingMessage
 
@@ -189,3 +190,40 @@ async def test_send_does_not_retry_slack_level_error(no_sleep) -> None:
         await channel.send(OutgoingMessage(content="hi", reply_to="C123"))
 
     assert post.await_count == 1
+
+
+async def test_retry_request_returns_429_response_on_final_attempt(no_sleep) -> None:
+    """An exhausted 429 returns the Response instead of raising RuntimeError.
+
+    Mirrors the 5xx branch: on the final attempt ``retry_request`` must not
+    sleep again or fall through to ``RuntimeError("retry_request exhausted")`` —
+    it returns the 429 so the caller sees the true status, ``Retry-After``
+    header, and response body (e.g. Slack's ``{"ok": false}`` payload).
+    """
+
+    async def always_429() -> httpx.Response:
+        return _resp(429, {"ok": False, "error": "rate_limited"}, headers={"Retry-After": "2"})
+
+    resp = await retry_request(always_429, max_retries=1, base_delay=0.1)
+
+    assert resp.status_code == 429
+    assert resp.headers["Retry-After"] == "2"
+    assert resp.json() == {"ok": False, "error": "rate_limited"}
+
+
+async def test_retry_request_falls_back_on_non_numeric_retry_after(no_sleep) -> None:
+    """A non-numeric / HTTP-date Retry-After (RFC 7231) does not raise ValueError."""
+
+    responses = [
+        _resp(429, headers={"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}),
+        _resp(200),
+    ]
+
+    async def _endpoint() -> httpx.Response:
+        return responses.pop(0)
+
+    resp = await retry_request(_endpoint, max_retries=1, base_delay=0.1)
+
+    assert resp.status_code == 200
+    # Fell back to base_delay * (2 ** 0) = 0.1 instead of raising on the date string.
+    no_sleep.assert_awaited_once_with(0.1)
