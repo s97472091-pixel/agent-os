@@ -16,6 +16,7 @@ from agentos.channels.contract import ChannelSendStatus, run_channel_contract
 from agentos.channels.email import (
     EmailChannel,
     EmailChannelConfig,
+    _quote_imap_mailbox,
     html_to_text,
     is_automated,
     normalize_address,
@@ -382,9 +383,11 @@ class _FakeIMAP:
         self._raw = raw
         self._size = len(raw) if size is None else size
         self.stored: list[tuple[str, str, str]] = []
+        self.selected: list[str] = []
         self.closed = False
 
     def select(self, folder: str) -> tuple[str, list[bytes]]:
+        self.selected.append(folder)
         return "OK", [b"1"]
 
     def search(self, charset: Any, criteria: str) -> tuple[str, list[bytes]]:
@@ -461,6 +464,33 @@ def test_mark_seen_disabled_leaves_the_flag_alone(monkeypatch: pytest.MonkeyPatc
     channel._fetch_unseen()
 
     assert fake.stored == []
+
+
+@pytest.mark.parametrize(
+    ("folder", "expected"),
+    [
+        ("INBOX", '"INBOX"'),
+        ("Sent Items", '"Sent Items"'),
+        ("Archive/2026", '"Archive/2026"'),
+        ('Weird"Name', '"Weird\\"Name"'),
+        (r"Back\slash", r'"Back\\slash"'),
+        ("", '""'),
+    ],
+)
+def test_imap_mailbox_is_quoted_per_rfc3501(folder: str, expected: str) -> None:
+    assert _quote_imap_mailbox(folder) == expected
+
+
+def test_poll_selects_a_quoted_folder_with_spaces(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    channel = EmailChannel(config=_config(imap_folder="Sent Items"))
+    fake = _FakeIMAP(_raw().as_bytes())
+    monkeypatch.setattr(channel, "_imap_connect", lambda: fake)
+
+    channel._fetch_unseen()
+
+    assert fake.selected == ['"Sent Items"']
 
 
 async def test_poll_loop_survives_a_failing_poll(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -120,6 +120,17 @@ _HTML_DROP_RE = re.compile(r"(?is)<\s*(script|style)\b.*?<\s*/\s*\1\s*>")
 _HTML_TAG_RE = re.compile(r"(?s)<[^>]+>")
 
 
+def _quote_imap_mailbox(mailbox: str) -> str:
+    """Quote an IMAP mailbox name per RFC 3501 §4.3 quoted-string syntax.
+
+    ``imaplib`` passes mailbox arguments to the wire command verbatim, so a
+    folder whose name contains whitespace (e.g. ``"Sent Items"``) is sent as
+    multiple unquoted tokens and rejected by the server with an IMAP protocol
+    error.
+    """
+    return '"' + mailbox.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 class EmailChannelConfig(BaseModel):
     """Adapter-level config for the IMAP/SMTP email channel.
 
@@ -451,7 +462,7 @@ class EmailChannel:
 
         client = self._imap_connect()
         try:
-            client.select(self.config.imap_folder)
+            client.select(_quote_imap_mailbox(self.config.imap_folder))
             status, data = client.search(None, "UNSEEN")
             if status != "OK":
                 raise RuntimeError(f"IMAP search failed: {status}")
