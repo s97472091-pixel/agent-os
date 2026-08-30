@@ -167,9 +167,11 @@ class MemorySyncManager:
             deletes = set(self._pending_deletes)
             self._pending_changes.clear()
             self._pending_deletes.clear()
-            failed_deletes = await self._do_file_sync(changes=changes, deletes=deletes)
+            failed_deletes, failed_indexes = await self._do_file_sync(
+                changes=changes, deletes=deletes
+            )
         else:
-            failed_deletes = await self._do_file_sync(force=force)
+            failed_deletes, failed_indexes = await self._do_file_sync(force=force)
 
         session_sync_failed = await self._do_session_sync(reason=reason, force=force)
 
@@ -181,7 +183,17 @@ class MemorySyncManager:
                 reason=reason,
                 paths=sorted(failed_deletes),
             )
-        else:
+
+        if failed_indexes:
+            self._pending_changes.update(failed_indexes)
+            self._dirty = True
+            logger.warning(
+                "sync_manager.indexes_requeued",
+                reason=reason,
+                paths=sorted(failed_indexes),
+            )
+
+        if not failed_deletes and not failed_indexes:
             # Don't clobber _dirty=True set by a concurrent _do_ttl_sweep
             # (separate background task). If anything is still queued,
             # leave _dirty truthy so the next search-time sync retries
@@ -259,14 +271,16 @@ class MemorySyncManager:
         changes: set[str] | None = None,
         deletes: set[str] | None = None,
         force: bool = False,
-    ) -> set[str]:
+    ) -> tuple[set[str], set[str]]:
         """Re-index changed and deleted files from disk.
 
-        Returns the set of delete paths whose ``store.remove_file`` raised
-        (anything other than success). Caller is expected to re-enqueue
-        them so a transient SQLite lock does not orphan chunks. Index
-        failures stay log-only because the file is still on disk and the
-        next watcher tick will rediscover it via mtime.
+        Returns a ``(failed_deletes, failed_indexes)`` pair.  Failed
+        deletes are paths whose ``store.remove_file`` raised; failed indexes
+        are paths whose ``store.index_file`` raised.  The caller is expected
+        to re-enqueue both so a transient error does not permanently lose
+        the path — deletes into ``_pending_deletes`` and indexes into
+        ``_pending_changes`` so the next watcher tick retries them without
+        an mtime change.
         """
         if changes is None or deletes is None:
             current = self._scan_files()
@@ -285,6 +299,7 @@ class MemorySyncManager:
             self._mtimes = current
 
         failed_deletes: set[str] = set()
+        failed_indexes: set[str] = set()
         for rel_path in deletes:
             try:
                 await self._store.remove_file(rel_path)
@@ -323,9 +338,10 @@ class MemorySyncManager:
                         source=source.value,
                     )
             except Exception:
+                failed_indexes.add(rel_path)
                 logger.warning("sync_manager.index_failed", path=rel_path)
 
-        return failed_deletes
+        return failed_deletes, failed_indexes
 
     async def _do_session_sync(self, *, reason: str, force: bool = False) -> bool:
         """Sync the derived sessions source when the current trigger can affect it.
