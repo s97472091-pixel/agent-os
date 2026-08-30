@@ -328,6 +328,40 @@ async def test_send_resolves_the_recipient_from_the_thread_cache(
     assert sent[0]["Subject"] == "Re: Status?"
 
 
+async def test_send_resolves_recipient_from_metadata_recipient(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Outbound message-tool sends resolve the address from metadata["recipient"]."""
+
+    channel = EmailChannel(config=_config())
+    sent: list[EmailMessage] = []
+    monkeypatch.setattr(channel, "_smtp_send", sent.append)
+
+    msg = OutgoingMessage(
+        content="Daily status update",
+        reply_to="colleague@example.com",
+        metadata={"recipient": "colleague@example.com"},
+    )
+    await channel.send(msg)
+
+    assert sent[0]["To"] == "colleague@example.com"
+    assert sent[0]["Subject"] == "Re: (no subject)"
+
+
+async def test_send_resolves_recipient_from_reply_to_email_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Scheduler/heartbeat delivery resolve the address from an email-shaped reply_to."""
+
+    channel = EmailChannel(config=_config())
+    sent: list[EmailMessage] = []
+    monkeypatch.setattr(channel, "_smtp_send", sent.append)
+
+    await channel.send(OutgoingMessage(content="alert", reply_to="alerts@example.com"))
+
+    assert sent[0]["To"] == "alerts@example.com"
+
+
 async def test_send_without_a_known_thread_is_refused() -> None:
     channel = EmailChannel(config=_config())
 
