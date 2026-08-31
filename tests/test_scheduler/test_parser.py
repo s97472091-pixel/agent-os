@@ -78,6 +78,44 @@ def test_parse_cron_dow_7_matches_sunday_not_monday() -> None:
     assert not expr.matches(monday)
 
 
+def test_matches_dom_and_dow_both_restricted_uses_or() -> None:
+    # POSIX: when both day-of-month and day-of-week are restricted (neither is
+    # a literal *), the job fires when EITHER field matches — not both. The
+    # old matcher ANDed all five fields, so "0 0 1,15 * 5" almost never fired.
+    expr = parse_cron("0 0 1,15 * 5")
+
+    # Every Friday that is neither the 1st nor the 15th must match (dow side).
+    assert expr.matches(datetime(2026, 8, 7, 0, 0))  # Friday, not 1st/15th
+    assert expr.matches(datetime(2026, 8, 21, 0, 0))  # Friday, not 1st/15th
+    # The 1st and the 15th match on the dom side regardless of weekday.
+    assert expr.matches(datetime(2026, 9, 1, 0, 0))  # Tuesday (not Friday)
+    assert expr.matches(datetime(2026, 9, 15, 0, 0))  # Tuesday (not Friday)
+    # A weekday that is neither Friday nor the 1st/15th must not match.
+    assert not expr.matches(datetime(2026, 9, 2, 0, 0))  # Wednesday
+    assert not expr.matches(datetime(2026, 9, 10, 0, 0))  # Thursday
+
+
+def test_matches_dom_restricted_dow_wildcard_only_dom_gates() -> None:
+    # When day-of-week is unrestricted, only day-of-month restricts.
+    expr = parse_cron("0 0 1 * *")
+    assert expr.matches(datetime(2026, 9, 1, 0, 0))  # 1st (a Tuesday)
+    assert not expr.matches(datetime(2026, 9, 2, 0, 0))
+
+
+def test_matches_dow_restricted_dom_wildcard_only_dow_gates() -> None:
+    # When day-of-month is unrestricted, only day-of-week restricts.
+    expr = parse_cron("0 0 * * 5")
+    assert expr.matches(datetime(2026, 8, 7, 0, 0))  # Friday
+    assert not expr.matches(datetime(2026, 8, 8, 0, 0))  # Saturday
+
+
+def test_matches_both_dom_and_dow_wildcard_any_day() -> None:
+    # Neither restricted: the job may run on any day (hour/minute still gate).
+    expr = parse_cron("0 12 * * *")
+    assert expr.matches(datetime(2026, 9, 2, 12, 0))
+    assert not expr.matches(datetime(2026, 9, 2, 13, 0))
+
+
 def test_parse_cron_rejects_unknown_preset() -> None:
     with pytest.raises(CronParseError, match="Unknown preset"):
         parse_cron("@bogus")

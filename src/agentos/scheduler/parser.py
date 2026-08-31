@@ -83,13 +83,31 @@ class CronExpression:
     raw: str
 
     def matches(self, dt: datetime) -> bool:
-        return (
+        # Minute, hour, and month are always ANDed.
+        if not (
             self.minute.matches(dt.minute)
             and self.hour.matches(dt.hour)
-            and self.day_of_month.matches(dt.day)
             and self.month.matches(dt.month)
-            and self.day_of_week.matches((dt.weekday() + 1) % 7)  # Python Mon=0 → cron Sun=0
-        )
+        ):
+            return False
+
+        dom_ok = self.day_of_month.matches(dt.day)
+        dow_ok = self.day_of_week.matches((dt.weekday() + 1) % 7)  # Python Mon=0 → cron Sun=0
+
+        # Per POSIX, when both day-of-month and day-of-week are restricted
+        # (neither is a literal *), the job fires when EITHER field matches.
+        # The standard: "If both fields are restricted (i.e., are not *),
+        # the cron job will run when either field matches."
+        dom_is_restricted = len(self.day_of_month.values) < 31  # full range 1-31 = 31 values
+        dow_is_restricted = len(self.day_of_week.values) < 7  # full range 0-6 = 7 values
+
+        if dom_is_restricted and dow_is_restricted:
+            return dom_ok or dow_ok
+        if dom_is_restricted:
+            return dom_ok
+        if dow_is_restricted:
+            return dow_ok
+        return dom_ok or dow_ok  # both unrestricted – any day matches
 
 
 def _parse_field(token: str, field_name: str, names: dict[str, int] | None = None) -> CronField:
@@ -182,9 +200,7 @@ def parse_iso_at(raw: str) -> datetime:
     except ValueError as exc:
         raise CronParseError(f"Invalid ISO-8601 timestamp: {raw!r}") from exc
     if dt.tzinfo is None or dt.utcoffset() is None:
-        raise CronParseError(
-            f"ISO-8601 timestamp must include a timezone offset: {raw!r}"
-        )
+        raise CronParseError(f"ISO-8601 timestamp must include a timezone offset: {raw!r}")
     return dt
 
 
