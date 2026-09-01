@@ -368,3 +368,51 @@ def test_skill_documents_the_read_only_boundary() -> None:
     assert "read-only" in body.lower()
     assert "uiMultiplier()" in body
     assert "4663" in body
+
+
+# ── #815: --rpc-url must be http(s), not file:// or a custom scheme ─────────
+
+
+def test_validate_http_url_rejects_non_http_schemes() -> None:
+    for invalid in [
+        "file:///etc/passwd",
+        "file:///c:/windows/system32/drivers/etc/hosts",
+        "ftp://rpc.example.com",
+        "gopher://example.com",
+        "javascript:alert(1)",
+    ]:
+        with pytest.raises(ValueError, match="must be http:// or https://"):
+            chain_stocks._validate_http_url(invalid)
+
+    # Empty / whitespace-only URLs are rejected too (with a clear message).
+    for empty in ["", "   "]:
+        with pytest.raises(ValueError, match="empty URL"):
+            chain_stocks._validate_http_url(empty)
+
+    assert chain_stocks._validate_http_url("http://127.0.0.1:8545") == "http://127.0.0.1:8545"
+    assert (
+        chain_stocks._validate_http_url("https://rpc.mainnet.chain.robinhood.com")
+        == "https://rpc.mainnet.chain.robinhood.com"
+    )
+
+
+def test_validate_http_url_rejects_missing_host() -> None:
+    """A bare scheme with no host must be rejected even if it starts with http://."""
+    with pytest.raises(ValueError, match="missing host"):
+        chain_stocks._validate_http_url("http://")
+
+
+def test_http_json_rejects_file_scheme() -> None:
+    with pytest.raises(ValueError, match="must be http:// or https://"):
+        chain_stocks._http_json("file:///etc/passwd", timeout=5.0)
+
+
+def test_main_rejects_invalid_rpc_url(capsys: pytest.CaptureFixture[str]) -> None:
+    import json
+
+    code = chain_stocks.main(["--address", AAPL, "--rpc-url", "file:///etc/passwd"])
+    assert code == 0
+    out, _ = capsys.readouterr()
+    payload = json.loads(out)
+    assert "invalid rpc-url" in payload.get("error", "")
+    assert "must be http:// or https://" in payload.get("error", "")

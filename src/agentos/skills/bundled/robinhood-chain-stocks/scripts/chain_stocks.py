@@ -23,6 +23,7 @@ import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -55,12 +56,36 @@ class RpcError(RuntimeError):
     """A JSON-RPC call returned an error or an unusable result."""
 
 
+def _validate_http_url(url: str) -> str:
+    """Validate and return a URL that must be http:// or https://.
+
+    Rejects ``file://``, ``ftp://``, and any custom scheme that could leak
+    local data or be abused as an SSRF oracle.  Uses ``urlsplit`` for robust
+    scheme detection (not a fragile ``startswith`` prefix check — see #818).
+    """
+    cleaned = (url or "").strip()
+    if not cleaned:
+        raise ValueError(f"empty URL: {url!r}")
+    try:
+        parsed = urllib.parse.urlsplit(cleaned)
+    except ValueError as exc:
+        raise ValueError(f"invalid URL {url!r}: {exc}") from exc
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError(
+            f"invalid URL scheme {parsed.scheme!r} in {url!r}: must be http:// or https://"
+        )
+    if not parsed.netloc:
+        raise ValueError(f"URL missing host {url!r}: must be http:// or https://")
+    return cleaned
+
+
 def _http_json(url: str, timeout: float, payload: dict[str, Any] | None = None) -> Any:
+    url = _validate_http_url(url)
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
     headers = {"User-Agent": "AgentOS-robinhood-chain-stocks/0.1"}
     if data is not None:
         headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, data=data, headers=headers)  # noqa: S310 - fixed endpoints
+    req = urllib.request.Request(url, data=data, headers=headers)  # noqa: S310 — validated http/https above
     with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
         return json.loads(resp.read().decode("utf-8", errors="replace"))
 
@@ -383,7 +408,7 @@ def _resolve_target(
     return str(match.get("address", "")), match, feeds
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Robinhood Chain on-chain stock reader")
     parser.add_argument("--query", help="Company name or ticker (e.g. Apple, AAPL)")
     parser.add_argument("--address", help="Token contract address; skips name resolution")
@@ -391,13 +416,18 @@ def main() -> int:
     parser.add_argument("--rpc-url", default=DEFAULT_RPC_URL, help="Robinhood Chain JSON-RPC URL")
     parser.add_argument("--no-price", action="store_true", help="Skip the Chainlink price read")
     parser.add_argument("--timeout", type=float, default=15.0, help="HTTP timeout seconds")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if not args.query and not args.address:
         print(json.dumps({"error": "provide --query or --address"}))
         return 0
     if args.holder and not _ADDRESS_RE.match(args.holder):
         print(json.dumps({"error": f"not a valid holder address: {args.holder}"}))
+        return 0
+    try:
+        args.rpc_url = _validate_http_url(args.rpc_url)
+    except ValueError as exc:
+        print(json.dumps({"error": f"invalid rpc-url: {exc}"}, ensure_ascii=False))
         return 0
 
     try:
