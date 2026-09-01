@@ -14,6 +14,8 @@ import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any, Literal
 
 import httpx
@@ -271,6 +273,46 @@ class FloodStrikeBackoff:
         self._fallback = False
 
 
+_MAX_RETRY_AFTER_SECONDS: float = 300.0
+"""Upper bound for a single Retry-After backoff (5 minutes).
+
+A server that sends a far-future HTTP-date or an unreasonably large
+integer in its ``Retry-After`` header cannot make the async task sleep
+indefinitely — the delay is capped at this value.  The limit is generous
+enough to cover every legitimate rate-limit window seen in practice
+(most are 1–120 seconds) while bounding worst-case resource exhaustion.
+"""
+
+
+def _parse_retry_after(
+    header_val: str | None,
+    default_delay: float,
+    max_delay: float = _MAX_RETRY_AFTER_SECONDS,
+) -> float:
+    """Parse a ``Retry-After`` header value into seconds.
+
+    Supports RFC 7231 / RFC 9110 formats: an integer/float number of
+    seconds, or an HTTP-date (e.g. ``Wed, 21 Oct 2026 07:28:00 GMT``).
+    Falls back to ``default_delay`` when the header is missing, empty,
+    or unparseable.  The result is clamped to ``[0.0, max_delay]`` to
+    bound worst-case sleep duration.
+    """
+    if not header_val:
+        return default_delay
+
+    stripped = header_val.strip()
+    try:
+        delay = float(stripped)
+    except ValueError:
+        try:
+            dt = parsedate_to_datetime(stripped)
+            delay = (dt - datetime.now(UTC)).total_seconds()
+        except Exception:  # noqa: BLE001 — best-effort, fall back to default
+            return default_delay
+
+    return min(max(0.0, delay), max_delay)
+
+
 async def retry_request(
     func: Callable[..., Awaitable[httpx.Response]],
     *args: Any,
@@ -278,16 +320,26 @@ async def retry_request(
     base_delay: float = 1.0,
     **kwargs: Any,
 ) -> httpx.Response:
-    """Retry an httpx request with exponential backoff on transient errors."""
+    """Retry an httpx request with exponential backoff on transient errors.
+
+    On the final attempt the response is returned unconditionally (even
+    for HTTP 429), so the caller can inspect the status, headers, and
+    body instead of catching a bare ``RuntimeError``.
+    """
     last_exc: Exception | None = None
     for attempt in range(max_retries + 1):
         try:
             resp = await func(*args, **kwargs)
             if resp.status_code == 429:
-                retry_after = float(resp.headers.get("Retry-After", base_delay * (2**attempt)))
-                log.warning("rate_limited", retry_after=retry_after, attempt=attempt)
-                await asyncio.sleep(retry_after)
-                continue
+                if attempt < max_retries:
+                    retry_after = _parse_retry_after(
+                        resp.headers.get("Retry-After"),
+                        base_delay * (2**attempt),
+                    )
+                    log.warning("rate_limited", retry_after=retry_after, attempt=attempt)
+                    await asyncio.sleep(retry_after)
+                    continue
+                return resp
             if resp.status_code in {500, 502, 503, 504} and attempt < max_retries:
                 delay = base_delay * (2**attempt) + random.random()
                 log.warning("transient_error", status=resp.status_code, delay=delay)
