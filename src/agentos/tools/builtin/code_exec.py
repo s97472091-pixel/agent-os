@@ -23,10 +23,168 @@ from agentos.sandbox.types import DenialResult, SandboxRequest
 from agentos.tools.registry import tool
 from agentos.tools.types import ToolError, current_tool_context
 
-# Destructive Python patterns that must go through the same approval flow as
-# shell warnlist hits. Catches the "agent pivots from `rm` to `os.remove()`"
-# bypass. Matching is intentionally shallow (regex, not AST) — goal is to
-# force approval on obvious intent, not to prove safety.
+# Destructive Python module + attribute pairs that must go through the same
+# approval flow as shell warnlist hits. Catches the "agent pivots from `rm`
+# to `os.remove()`" bypass. Detection is AST-based so obfuscated spellings
+# (getattr with string concat, __import__ / importlib dynamic imports,
+# exec/eval wrappers, wildcard imports) are caught the same way as the
+# obvious forms. A regex whitelist remains as a fallback for snippets that
+# do not parse.
+_DESTRUCTIVE_MODULES = frozenset({"os", "shutil", "pathlib", "subprocess"})
+
+# Attribute names that mark a destructive operation when reached through one
+# of the destructive modules (or a Path object).
+_DESTRUCTIVE_ATTRS = frozenset({"remove", "unlink", "rmdir", "removedirs", "rmtree", "system"})
+
+# subprocess entry points that can execute a shell command.
+_SUBPROCESS_RUNNERS = frozenset({"run", "call", "Popen", "check_output", "check_call", "popen"})
+
+
+def _fold_string(node: ast.AST | None) -> str | None:
+    """Best-effort constant folding of a string expression (``+`` concat only).
+
+    Lets ``getattr(os, "rem" + "ove")`` resolve to ``"remove"``.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _fold_string(node.left)
+        right = _fold_string(node.right)
+        if left is not None and right is not None:
+            return left + right
+    if isinstance(node, ast.JoinedStr):
+        parts: list[str] = []
+        for value in node.values:
+            folded = _fold_string(value)
+            if folded is None:
+                return None
+            parts.append(folded)
+        return "".join(parts)
+    return None
+
+
+def _base_module(value: ast.AST | None) -> str | None:
+    """Best-effort module / Path name of an attribute base expression.
+
+    Resolves plain names (``os``), dotted paths (``pathlib.Path``), and the
+    dynamic-import spellings ``__import__("os")`` and
+    ``importlib.import_module("os")`` so attribute access on their result is
+    classified against the same module table.
+    """
+    if isinstance(value, ast.Name):
+        return value.id
+    if isinstance(value, ast.Attribute):
+        parent = _base_module(value.value)
+        return f"{parent}.{value.attr}" if parent is not None else value.attr
+    if isinstance(value, ast.Call):
+        func = value.func
+        if isinstance(func, ast.Name) and func.id == "__import__" and value.args:
+            return _fold_string(value.args[0])
+        if isinstance(func, ast.Attribute) and func.attr == "import_module":
+            parent = _base_module(func.value)
+            if parent == "importlib" and value.args:
+                return _fold_string(value.args[0])
+    return None
+
+
+def _is_getattr_call(func: ast.AST) -> bool:
+    """True when *func* is ``getattr(...)`` (bare) or ``obj.getattr(...)``."""
+    if isinstance(func, ast.Name):
+        return func.id == "getattr"
+    if isinstance(func, ast.Attribute):
+        return func.attr == "getattr"
+    return False
+
+
+def _check_code_destructive_ast(code: str) -> str | None:
+    """AST-based destructive-pattern detection, or None if the code is clean.
+
+    Covers the regex whitelist plus the reported bypasses: ``getattr`` with a
+    folded attribute name, ``__import__`` / ``importlib.import_module`` of a
+    destructive module, ``exec``/``eval`` wrapping destructive code, and
+    ``from os import *``-style wildcard imports.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return None  # not parseable — let the regex fallback handle it
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+
+        # exec(...) / eval(...) with a string literal — recursively inspect.
+        if isinstance(func, ast.Name) and func.id in ("exec", "eval") and node.args:
+            inner = _fold_string(node.args[0])
+            if inner is not None and _check_code_destructive(inner):
+                return f"destructive code passed to {func.id}(...)"
+            continue
+
+        # getattr(os, "rem" + "ove") / getattr(os, name) — bare or dotted.
+        if _is_getattr_call(func) and len(node.args) >= 2:
+            obj = node.args[0]
+            attr = _fold_string(node.args[1])
+            if attr is not None and attr in _DESTRUCTIVE_ATTRS:
+                return f"destructive attribute via getattr: {attr}()"
+            # A non-literal attribute name on a destructive module is opaque
+            # and cannot be proven safe.
+            obj_name = _base_module(obj)
+            if attr is None and obj_name in _DESTRUCTIVE_MODULES:
+                return f"dynamic attribute access on {obj_name}"
+            continue
+
+        # __import__("os") / importlib.import_module("os") — dynamic module.
+        mod = None
+        if isinstance(func, ast.Name) and func.id == "__import__" and node.args:
+            mod = _fold_string(node.args[0])
+        elif isinstance(func, ast.Attribute) and func.attr == "import_module" and node.args:
+            if _base_module(func.value) == "importlib":
+                mod = _fold_string(node.args[0])
+        if mod in _DESTRUCTIVE_MODULES:
+            return f"dynamic import of {mod}"
+
+        if not isinstance(func, ast.Attribute):
+            continue
+        attr = func.attr
+        base = _base_module(func.value)
+        if base == "os" and attr in ("remove", "unlink", "rmdir", "removedirs"):
+            return f"os.{attr}()"
+        if base == "shutil" and attr == "rmtree":
+            return "shutil.rmtree()"
+        # .unlink()/.rmdir() are pathlib-Path methods — flag on any base,
+        # matching the previous regex whitelist behavior.
+        if attr in ("unlink", "rmdir"):
+            return f"{attr}()"
+        if base == "os" and attr == "system":
+            arg = _fold_string(node.args[0]) if node.args else None
+            if arg is not None and re.search(r"\brm\b|\brmdir\b", arg):
+                return "os.system with rm"
+        if base == "subprocess" and attr in _SUBPROCESS_RUNNERS:
+            args_text = " ".join(_fold_string(a) or "" for a in node.args)
+            # Also check list literal args: subprocess.run(["rm", ...])
+            for a in node.args:
+                if isinstance(a, ast.List):
+                    for elt in a.elts:
+                        s = _fold_string(elt)
+                        if s is not None:
+                            args_text += " " + s
+            if re.search(r"\brm\b|\brmdir\b", args_text):
+                return "subprocess invoking rm/rmdir"
+
+    # Wildcard imports from destructive modules hide their names from the
+    # per-call analysis above (``from os import *; remove('/x')``).
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.ImportFrom)
+            and node.module in _DESTRUCTIVE_MODULES
+            and any(alias.name == "*" for alias in node.names)
+        ):
+            return f"wildcard import from {node.module}"
+
+    return None
+
+
 _DESTRUCTIVE_PY_PATTERNS: list[tuple[str, str]] = [
     (r"\bos\.remove\s*\(", "os.remove()"),
     (r"\bos\.unlink\s*\(", "os.unlink()"),
@@ -47,12 +205,26 @@ _DESTRUCTIVE_PY_PATTERNS: list[tuple[str, str]] = [
 ]
 
 
-def _check_code_destructive(code: str) -> str | None:
-    """Return a human-readable warning if *code* triggers a destructive pattern, else None."""
+def _check_code_destructive_regex(code: str) -> str | None:
+    """Regex whitelist fallback for snippets that do not parse as Python."""
     for pattern, label in _DESTRUCTIVE_PY_PATTERNS:
         if re.search(pattern, code):
             return f"destructive Python operation detected: {label}"
     return None
+
+
+def _check_code_destructive(code: str) -> str | None:
+    """Return a human-readable warning if *code* triggers a destructive pattern, else None.
+
+    AST-based by default so obfuscated spellings are caught; the regex
+    whitelist only covers snippets that do not parse as Python (where the
+    AST analyzer cannot run).
+    """
+    try:
+        ast.parse(code)
+    except SyntaxError:
+        return _check_code_destructive_regex(code)
+    return _check_code_destructive_ast(code)
 
 
 _CODE_SENSITIVE_READ_TOKENS = (
