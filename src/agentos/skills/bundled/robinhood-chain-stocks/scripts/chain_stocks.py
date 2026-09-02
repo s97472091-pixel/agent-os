@@ -318,6 +318,17 @@ def inspect_token(
         if isinstance(onchain_symbol, str) and onchain_symbol:
             feed = find_feed(onchain_symbol, feeds)
 
+    # A confirmed impersonator must not be decorated with a genuine quote.
+    # `isStockToken: False` means uiMultiplier() reverted — the contract is
+    # PROVEN not a Stock Token, and the feed lookup above trusts a string the
+    # contract reports itself. Withhold the price (and the derived holding
+    # value) and record why. `None` (unreachable node) stays eligible — the
+    # existing "unverified is not disproven" rule applies.
+    if out["isStockToken"] is False:
+        if feed is not None:
+            errors["price"] = "withheld: uiMultiplier() proved this is not a Stock Token"
+        feed = None
+
     if feed is not None:
         price = _try(
             lambda: _read_price(rpc_url, str(feed["proxyAddress"]), timeout, now), errors, "price"
