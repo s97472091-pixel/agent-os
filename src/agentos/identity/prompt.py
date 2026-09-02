@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
+from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from .types import AgentProfile
 
@@ -15,7 +15,7 @@ def _make_env() -> Environment:
         undefined=StrictUndefined,
         trim_blocks=True,
         lstrip_blocks=True,
-        autoescape=select_autoescape(["html", "xml"]),
+        autoescape=True,
     )
 
 

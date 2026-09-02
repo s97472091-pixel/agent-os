@@ -168,7 +168,7 @@ def test_runtime_section_carries_os_shell_and_working_directory() -> None:
     assert "## Workspace" not in prompt
     assert "- OS: Darwin" in prompt
     assert "- Shell: /bin/zsh" in prompt
-    assert "- Working directory: <WS>" in prompt
+    assert "- Working directory: &lt;WS&gt;" in prompt
 
 
 def test_runtime_section_omits_workspace_line_when_unset() -> None:
