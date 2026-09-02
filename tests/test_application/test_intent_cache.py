@@ -96,3 +96,82 @@ class TestRecordAndCheck:
         cache.clear()
         assert cache.check("rm /a") is False
         assert cache.check("rm /b") is False
+
+
+class TestFlagEscalationBypass:
+    """Approving a plain delete must not unlock flag-escalated variants.
+
+    Issue #849: ``cache.record('rm /tmp/a')`` then ``cache.check('rm -rf
+    /tmp/a')`` returned True because only the target path was part of the
+    cache key. Escalation flags (-r/-R/--recursive, -f/--force,
+    --no-preserve-root, and Python recursion like shutil.rmtree) must be
+    part of the approved capability, monotonic in one direction only:
+    approving a *stronger* delete still covers the *milder* form, but a
+    milder approval never covers a stronger one.
+    """
+
+    def test_plain_approval_does_not_cover_recursive_force(self) -> None:
+        cache = IntentApprovalCache()
+        cache.record("rm /tmp/a")
+        assert cache.check("rm -rf /tmp/a") is False
+        assert cache.check("rm -r /tmp/a") is False
+        assert cache.check("rm -f /tmp/a") is False
+
+    def test_plain_approval_still_covers_exact_and_milder(self) -> None:
+        cache = IntentApprovalCache()
+        cache.record("rm /tmp/a")
+        assert cache.check("rm /tmp/a") is True
+        # A path with a trailing slash normalizes to the same target and
+        # carries no escalation flags, so it stays approved.
+        assert cache.check("rm /tmp/a/") is True
+
+    def test_strong_approval_covers_milder_but_not_stronger(self) -> None:
+        cache = IntentApprovalCache()
+        cache.record("rm -rf /tmp/a")
+        # Recursive+force approval still covers the plain and single-flag
+        # variants of the same target (monotonic — capability only grows).
+        assert cache.check("rm /tmp/a") is True
+        assert cache.check("rm -r /tmp/a") is True
+        assert cache.check("rm -f /tmp/a") is True
+        assert cache.check("rm -rf /tmp/a") is True
+        # But never a different, stronger target.
+        assert cache.check("rm -rf /tmp/b") is False
+
+    def test_long_flag_escalation(self) -> None:
+        cache = IntentApprovalCache()
+        cache.record("rm /tmp/a")
+        assert cache.check("rm --recursive /tmp/a") is False
+        assert cache.check("rm --force /tmp/a") is False
+
+    def test_force_alone_does_not_cover_recursive(self) -> None:
+        cache = IntentApprovalCache()
+        cache.record("rm -f /tmp/a")
+        assert cache.check("rm -f /tmp/a") is True
+        assert cache.check("rm -rf /tmp/a") is False
+
+    def test_python_rmtree_is_recursive_escalation(self) -> None:
+        cache = IntentApprovalCache()
+        # os.remove approval must not cover the recursive shutil.rmtree on
+        # the same path (rmtree implies the "recursive" capability).
+        cache.record("os.remove('/tmp/a')")
+        assert cache.check("os.remove('/tmp/a')") is True
+        assert cache.check("shutil.rmtree('/tmp/a')") is False
+        assert cache.check("os.removedirs('/tmp/a')") is False
+
+    def test_python_rmtree_approval_covers_single_delete(self) -> None:
+        cache = IntentApprovalCache()
+        cache.record("shutil.rmtree('/tmp/a')")
+        assert cache.check("shutil.rmtree('/tmp/a')") is True
+        assert cache.check("os.remove('/tmp/a')") is True
+        assert cache.check("Path('/tmp/a').unlink()") is True
+
+    def test_record_merges_flags_monotonically(self) -> None:
+        cache = IntentApprovalCache()
+        cache.record("rm /tmp/a")
+        # A later, stronger approval upgrades the same (kind, target) entry.
+        cache.record("rm -rf /tmp/a")
+        assert cache.check("rm -rf /tmp/a") is True
+        assert cache.check("rm /tmp/a") is True
+        # And a later milder record does not downgrade the entry.
+        cache.record("rm /tmp/a")
+        assert cache.check("rm -rf /tmp/a") is True

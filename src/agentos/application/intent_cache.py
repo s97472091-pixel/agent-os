@@ -45,12 +45,27 @@ def _norm_path(raw: str, *, base_dir: str | Path | None = None) -> str:
 
 # Regex-based single-capture extractors for Python-flavoured deletes. Each
 # regex uses ``finditer`` so ``shutil.rmtree("a"); os.remove("b")`` yields
-# both paths.
-_PY_DELETE_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bos\.(?:remove|unlink|rmdir|removedirs)\s*\(\s*[\"']([^\"']+)[\"']"),
-    re.compile(r"\bshutil\.rmtree\s*\(\s*[\"']([^\"']+)[\"']"),
-    re.compile(
-        r"\b(?:pathlib\.)?Path\s*\(\s*[\"']([^\"']+)[\"']\s*\)\s*\.(?:unlink|rmdir)\s*\("
+# both paths. Each pattern carries the escalation flags its operation
+# implies (e.g. ``shutil.rmtree`` is inherently recursive) so the approval
+# cache can tell ``os.remove`` apart from a recursive delete.
+_PY_DELETE_PATTERNS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
+    (
+        re.compile(r"\bos\.(?:remove|unlink|rmdir)\s*\(\s*[\"']([^\"']+)[\"']"),
+        frozenset(),
+    ),
+    (
+        re.compile(r"\bos\.removedirs\s*\(\s*[\"']([^\"']+)[\"']"),
+        frozenset({"recursive"}),
+    ),
+    (
+        re.compile(r"\bshutil\.rmtree\s*\(\s*[\"']([^\"']+)[\"']"),
+        frozenset({"recursive"}),
+    ),
+    (
+        re.compile(
+            r"\b(?:pathlib\.)?Path\s*\(\s*[\"']([^\"']+)[\"']\s*\)\s*\.(?:unlink|rmdir)\s*\("
+        ),
+        frozenset(),
     ),
 )
 
@@ -58,11 +73,40 @@ _PY_DELETE_PATTERNS: tuple[re.Pattern[str], ...] = (
 _SHELL_SEPARATORS = (";", "&&", "||", "|", "&")
 
 
-def _extract_rm_targets(command: str) -> list[str]:
-    """Pull every non-flag argument out of every ``rm`` invocation.
+def _rm_escalation_flags(tokens: list[str]) -> frozenset[str]:
+    """Map an ``rm`` invocation's flags to escalation-relevant capabilities.
+
+    Only flags that make the delete *more* destructive are tracked so an
+    approval for ``rm /a`` can never be replayed as ``rm -rf /a`` while a
+    ``rm -rf /a`` approval still covers the milder ``rm /a`` (monotonic:
+    approval only ever grows stronger, never weaker). ``-i``/``-v`` and
+    other benign flags are ignored.
+    """
+    flags: set[str] = set()
+    for token in tokens:
+        if not token.startswith("-"):
+            continue
+        if token.startswith("--"):
+            if token == "--recursive":
+                flags.add("recursive")
+            elif token == "--force":
+                flags.add("force")
+            elif token == "--no-preserve-root":
+                flags.add("no-preserve-root")
+            continue
+        for char in token[1:]:
+            if char in "rR":
+                flags.add("recursive")
+            elif char == "f":
+                flags.add("force")
+    return frozenset(flags)
+
+
+def _extract_rm_targets(command: str) -> list[tuple[str, frozenset[str]]]:
+    """Pull every (target, escalation-flags) pair out of every ``rm`` invocation.
 
     Handles ``rm a b c``, ``rm -rf /a /b``, quoted paths, and stops at shell
-    separators. Uses ``finditer`` so ``rm foo; rm -rf /bar`` yields targets
+    separators. Uses ``finditer`` so ``rm foo; rm -rf /bar`` yields pairs
     from both invocations independently. Does not try to be a full shell
     parser — falls back to whitespace split on shlex errors (unbalanced quotes).
     """
@@ -74,8 +118,8 @@ def _extract_rm_targets(command: str) -> list[str]:
     if not matches:
         return []
 
-    targets: list[str] = []
-    seen: set[str] = set()
+    targets: list[tuple[str, frozenset[str]]] = []
+    seen: set[tuple[str, frozenset[str]]] = set()
 
     for match in matches:
         tail = match.group(1).strip()
@@ -94,11 +138,12 @@ def _extract_rm_targets(command: str) -> list[str]:
                 token_sets.append(tail.split())
 
         for tokens in token_sets:
+            flags = _rm_escalation_flags(tokens)
             for token in tokens:
-                if not token or token.startswith("-") or token in seen:
+                if not token or token.startswith("-") or (token, flags) in seen:
                     continue
-                seen.add(token)
-                targets.append(token)
+                seen.add((token, flags))
+                targets.append((token, flags))
 
     return targets
 
@@ -107,31 +152,36 @@ def _extract_intents(
     command: str,
     *,
     base_dir: str | Path | None = None,
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, frozenset[str]]]:
     """Return every recognized destructive intent, deduped and normalized.
 
     ``rm /a /b /c`` -> three tuples; ``shutil.rmtree('a'); os.remove('b')`` ->
-    two tuples; a plain echo returns an empty list.
+    two tuples; a plain echo returns an empty list. Each tuple is
+    ``(kind, target, escalation_flags)`` so the cache can distinguish
+    ``rm /a`` from ``rm -rf /a`` on the same path.
     """
     if not command:
         return []
-    paths: list[str] = []
-    paths.extend(_extract_rm_targets(command))
-    for pattern in _PY_DELETE_PATTERNS:
-        paths.extend(m.group(1) for m in pattern.finditer(command))
 
-    result: list[tuple[str, str]] = []
-    seen: set[tuple[str, str]] = set()
-    for raw in paths:
-        intent = ("delete", _norm_path(raw, base_dir=base_dir))
+    result: list[tuple[str, str, frozenset[str]]] = []
+    seen: set[tuple[str, str, frozenset[str]]] = set()
+    for raw, flags in _extract_rm_targets(command):
+        intent = ("delete", _norm_path(raw, base_dir=base_dir), flags)
         if intent in seen:
             continue
         seen.add(intent)
         result.append(intent)
+    for pattern, flags in _PY_DELETE_PATTERNS:
+        for match in pattern.finditer(command):
+            intent = ("delete", _norm_path(match.group(1), base_dir=base_dir), flags)
+            if intent in seen:
+                continue
+            seen.add(intent)
+            result.append(intent)
     return result
 
 
-def _extract_intent(command: str) -> tuple[str, str] | None:
+def _extract_intent(command: str) -> tuple[str, str, frozenset[str]] | None:
     """First extracted intent, or None. Convenience for single-target callers."""
     intents = _extract_intents(command)
     return intents[0] if intents else None
@@ -152,13 +202,13 @@ class IntentApprovalCache:
 
     def __init__(self, default_ttl: float = _DEFAULT_TTL_SECONDS) -> None:
         self._default_ttl = default_ttl
-        # intent -> (expires_monotonic, scope)
-        self._entries: dict[tuple[str, str], tuple[float, str]] = {}
+        # intent -> (expires_monotonic, scope, approved_flags)
+        self._entries: dict[tuple[str, str], tuple[float, str, frozenset[str]]] = {}
         self._lock = threading.Lock()
 
     def record(
         self, command: str, ttl: float | None = None, *, scope: str = "once"
-    ) -> list[tuple[str, str]]:
+    ) -> list[tuple[str, str, frozenset[str]]]:
         """Mark every intent extracted from *command* as approved.
 
         Handles multi-target commands like ``rm a b c`` — each path becomes its
@@ -170,11 +220,20 @@ class IntentApprovalCache:
             return []
         expires = time.monotonic() + (ttl if ttl is not None else self._default_ttl)
         with self._lock:
-            for intent in intents:
-                self._entries[intent] = (expires, scope)
+            for kind, target, flags in intents:
+                key = (kind, target)
+                existing = self._entries.get(key)
+                if existing is not None:
+                    # Keep the later expiry; union flags so approved
+                    # capability only grows, never shrinks.
+                    new_expiry = max(existing[0], expires)
+                    new_scope = existing[1] if existing[0] >= expires else scope
+                    self._entries[key] = (new_expiry, new_scope, existing[2] | flags)
+                else:
+                    self._entries[key] = (expires, scope, flags)
         return intents
 
-    def record_always(self, command: str) -> list[tuple[str, str]]:
+    def record_always(self, command: str) -> list[tuple[str, str, frozenset[str]]]:
         """Remember every intent in *command* for the session lifetime."""
         return self.record(command, ttl=_ALWAYS_TTL_SECONDS, scope="always")
 
@@ -182,20 +241,25 @@ class IntentApprovalCache:
         """Return True only when **every** extracted intent is still approved.
 
         Multi-target commands must have approval for *all* targets — one
-        missing path means the whole command needs fresh approval.
+        missing path means the whole command needs fresh approval.  The
+        approved escalation flags must be a superset of the requested flags
+        so ``rm -rf /a`` can never replay on a ``rm /a`` approval.
         """
         intents = _extract_intents(command)
         if not intents:
             return False
         now = time.monotonic()
         with self._lock:
-            for intent in intents:
-                entry = self._entries.get(intent)
+            for kind, target, flags in intents:
+                key = (kind, target)
+                entry = self._entries.get(key)
                 if entry is None:
                     return False
-                expires, _scope = entry
+                expires, _scope, approved_flags = entry
                 if expires < now:
-                    self._entries.pop(intent, None)
+                    self._entries.pop(key, None)
+                    return False
+                if not flags <= approved_flags:
                     return False
         return True
 
@@ -204,8 +268,8 @@ class IntentApprovalCache:
         if not intents:
             return
         with self._lock:
-            for intent in intents:
-                self._entries.pop(intent, None)
+            for kind, target, _flags in intents:
+                self._entries.pop((kind, target), None)
 
     def clear(self) -> None:
         with self._lock:
@@ -215,9 +279,7 @@ class IntentApprovalCache:
         """Drop every entry whose scope matches, leaving other scopes intact."""
         with self._lock:
             self._entries = {
-                intent: data
-                for intent, data in self._entries.items()
-                if data[1] != scope
+                intent: data for intent, data in self._entries.items() if data[1] != scope
             }
 
 
