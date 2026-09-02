@@ -17,6 +17,7 @@ from starlette.responses import Response
 from starlette.routing import Route
 
 from agentos.channel_pairing import ChannelPairingStore, PairingStoreError
+import hmac
 from agentos.channels._attachment_io import (
     attachment_limit_for_mime,
     ensure_declared_size_within_limit,
@@ -175,7 +176,6 @@ def _slice_utf16(text: str, offset: int, length: int) -> str:
         return ""
     u16 = text.encode("utf-16-le")
     return u16[offset * 2 : (offset + length) * 2].decode("utf-16-le", errors="replace")
-
 
 
 @dataclass
@@ -692,7 +692,7 @@ class TelegramChannel:
         secret = self.config.webhook_secret_token
         if not secret:
             return Response(status_code=503)
-        if request.headers.get("X-Telegram-Bot-Api-Secret-Token") != secret:
+        if not hmac.compare_digest(secret, request.headers.get("X-Telegram-Bot-Api-Secret-Token")):
             return Response(status_code=401)
         try:
             update = await request.json()
