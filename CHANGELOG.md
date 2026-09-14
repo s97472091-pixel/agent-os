@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `media` tools: `image`, `pdf`, `voice_clone`, `voice_convert`, and
+  `dubbing_generate` now reject a directory argument with a clear
+  `IsADirectoryError` instead of letting the raw filesystem failure through.
+  `_read_image_file` and `_resolve_supported_audio_file_for_tool` call
+  `read_bytes()` straight after an `exists()` check, so a directory matching a
+  supported media extension (`photo.png/`, `sample.wav/`) surfaced as
+  `PermissionError: [Errno 13]` on Windows and `IsADirectoryError` on POSIX,
+  which the failure envelope rendered as "The tool was not permitted to perform
+  this action." -- a policy denial that never happened. `pdf` reported the same
+  input as "File is not a valid PDF". All of them now validate a regular file
+  the way `read_file` and `read_spreadsheet` already do, so the envelope says
+  "The tool expected a file but received a directory." (#2153)
+
 ## [2026.9.14] - 2026-09-14
 
 ### Added
