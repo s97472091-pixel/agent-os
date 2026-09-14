@@ -69,8 +69,18 @@ def main() -> int:
     if not args.data.is_file():
         print(f"error: data {args.data} not found", file=sys.stderr)
         return 2
-    raw = json.loads(args.data.read_text(encoding="utf-8"))
-    data = {str(k): str(v) for k, v in (raw.items() if isinstance(raw, dict) else [])}
+    try:
+        raw = json.loads(args.data.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        print(f"error: data {args.data} is not valid JSON: {exc}", file=sys.stderr)
+        return 2
+    if not isinstance(raw, dict):
+        print(
+            "error: data must be a JSON object mapping field name to value",
+            file=sys.stderr,
+        )
+        return 2
+    data = {str(k): str(v) for k, v in raw.items()}
     pages = fill(args.input, data, args.out)
     print(json.dumps({"pages_processed": pages, "fields": len(data)}, ensure_ascii=False))
     return 0

@@ -199,3 +199,57 @@ def test_tables_strategy_explicit_is_rejected_with_a_clear_message(
         extract.main()
     assert exc_info.value.code == 2
     assert "invalid choice: 'explicit'" in capsys.readouterr().err
+
+
+def _form_fill_module():
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        import form_fill  # type: ignore[import-not-found]
+    finally:
+        sys.path.pop(0)
+    return form_fill
+
+
+def test_form_fill_rejects_malformed_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A data file that is not valid JSON must exit 2 with a clear error.
+
+    It used to raise an unhandled JSONDecodeError and exit 1, the same way
+    the missing-file case is already reported.
+    """
+    form_fill = _form_fill_module()
+    pdf_file = tmp_path / "doc.pdf"
+    _make_one_page_pdf(pdf_file, "TEST")
+    bad = tmp_path / "bad.json"
+    bad.write_text("nope", encoding="utf-8")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["form_fill.py", str(pdf_file), str(bad), "--out", str(tmp_path / "filled.pdf")],
+    )
+    assert form_fill.main() == 2
+    assert "is not valid JSON" in capsys.readouterr().err
+    assert not (tmp_path / "filled.pdf").exists()
+
+
+def test_form_fill_rejects_non_object_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A JSON array used to be coerced to zero fields: exit 0, output
+    written, no diagnostic. Wrong shape is now an error like wrong syntax."""
+    form_fill = _form_fill_module()
+    pdf_file = tmp_path / "doc.pdf"
+    _make_one_page_pdf(pdf_file, "TEST")
+    list_file = tmp_path / "list.json"
+    list_file.write_text('["not","a","dict"]', encoding="utf-8")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["form_fill.py", str(pdf_file), str(list_file), "--out", str(tmp_path / "filled.pdf")],
+    )
+    assert form_fill.main() == 2
+    assert "must be a JSON object" in capsys.readouterr().err
+    assert not (tmp_path / "filled.pdf").exists()
