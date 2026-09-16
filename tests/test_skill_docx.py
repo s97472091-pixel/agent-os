@@ -80,6 +80,78 @@ def test_create_then_inspect_round_trip(tmp_path: Path) -> None:
     assert inspected["has_tracked_changes"] is False
 
 
+def _create_docx_module() -> object:
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        import create_docx  # type: ignore[import-not-found]
+    finally:
+        sys.path.pop(0)
+    return create_docx
+
+
+@pytest.mark.parametrize("level", [10, 99, -1])
+def test_create_docx_rejects_a_heading_level_outside_the_python_docx_range(level: int) -> None:
+    """`add_heading` only builds levels 0-9, so the spec must be checked first.
+
+    A model-authored spec asks for `level: 10` easily enough, and the raw
+    `ValueError` used to escape `build()` and abort the run with a stack trace
+    that names neither the spec nor the fix (#2499).
+    """
+    create_docx = _create_docx_module()
+
+    with pytest.raises(ValueError, match="heading level"):
+        create_docx.build({"body": [{"kind": "heading", "level": level, "text": "Deep"}]})
+
+
+@pytest.mark.parametrize("level", ["two", None, [1]])
+def test_create_docx_rejects_a_heading_level_that_is_not_a_number(level: object) -> None:
+    """A level `int()` cannot read is reported the same way as an out-of-range one."""
+    create_docx = _create_docx_module()
+
+    with pytest.raises(ValueError, match="heading level"):
+        create_docx.build({"body": [{"kind": "heading", "level": level, "text": "Deep"}]})
+
+
+@pytest.mark.parametrize("level", [0, 1, 9])
+def test_create_docx_still_builds_every_supported_heading_level(level: int) -> None:
+    """The new guard must not narrow what python-docx already accepts."""
+    create_docx = _create_docx_module()
+
+    doc = create_docx.build({"body": [{"kind": "heading", "level": level, "text": "Fine"}]})
+
+    assert [p.text for p in doc.paragraphs] == ["Fine"]
+
+
+def test_create_docx_heading_without_a_level_stays_heading_one() -> None:
+    """An omitted `level` keeps defaulting to 1 rather than erroring."""
+    create_docx = _create_docx_module()
+
+    doc = create_docx.build({"body": [{"kind": "heading", "text": "Default"}]})
+
+    assert doc.paragraphs[0].style.name == "Heading 1"
+
+
+def test_create_docx_main_reports_an_invalid_heading_level_with_exit_code_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The CLI path exits 2 with a message, and leaves no half-built file behind."""
+    create_docx = _create_docx_module()
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(
+        json.dumps({"body": [{"kind": "heading", "level": 10, "text": "Deep"}]}),
+        encoding="utf-8",
+    )
+    out_path = tmp_path / "out.docx"
+
+    monkeypatch.setattr(sys, "argv", ["create_docx.py", str(spec_path), "--out", str(out_path)])
+
+    assert create_docx.main() == 2
+    captured = capsys.readouterr()
+    assert "heading level" in captured.err
+    assert "10" in captured.err
+    assert not out_path.exists()
+
+
 def test_edit_replace_text(tmp_path: Path) -> None:
     sys.path.insert(0, str(SCRIPTS))
     try:

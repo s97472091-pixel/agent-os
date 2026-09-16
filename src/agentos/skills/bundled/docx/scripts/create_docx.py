@@ -9,6 +9,9 @@ Spec schema:
         {"kind": "table", "rows": [["..."]]}
       ]
     }
+
+Heading levels are validated against python-docx's 0-9 range: a spec asking
+for anything outside it fails with exit code 2 instead of a traceback.
 """
 
 from __future__ import annotations
@@ -20,6 +23,30 @@ from pathlib import Path
 from typing import Any
 
 from docx import Document
+
+MAX_HEADING_LEVEL = 9
+
+
+class SpecError(ValueError):
+    """A spec value that cannot be rendered into a document."""
+
+
+def _heading_level(item: dict[str, Any]) -> int:
+    """Return *item*'s heading level, or raise `SpecError` if it is unusable.
+
+    python-docx accepts only 0-9, and a model-authored spec asks for `level:
+    10` easily enough. Passing the raw integer through aborts the whole run
+    with a `ValueError` traceback, which tells the caller nothing about which
+    part of the spec was wrong or how to fix it.
+    """
+    raw = item.get("level", 1)
+    try:
+        level = int(raw)
+    except (TypeError, ValueError):
+        raise SpecError(f"heading level must be an integer, got {raw!r}") from None
+    if not 0 <= level <= MAX_HEADING_LEVEL:
+        raise SpecError(f"heading level must be between 0 and {MAX_HEADING_LEVEL}, got {level}")
+    return level
 
 
 def build(spec: dict[str, Any]) -> Document:
@@ -38,7 +65,7 @@ def build(spec: dict[str, Any]) -> Document:
             continue
         kind = item.get("kind")
         if kind == "heading":
-            doc.add_heading(str(item.get("text", "")), level=int(item.get("level", 1)))
+            doc.add_heading(str(item.get("text", "")), level=_heading_level(item))
         elif kind == "paragraph":
             style = item.get("style") or "Normal"
             doc.add_paragraph(str(item.get("text", "")), style=style)
@@ -69,7 +96,11 @@ def main() -> int:
         print(f"error: spec {args.spec} not found", file=sys.stderr)
         return 2
     spec = json.loads(args.spec.read_text(encoding="utf-8"))
-    doc = build(spec)
+    try:
+        doc = build(spec)
+    except SpecError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     args.out.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(args.out))
     return 0
