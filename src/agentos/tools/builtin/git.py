@@ -142,6 +142,31 @@ async def git_status(workdir: str | None = None) -> str:
     return await _run_git("status", "--short", "--branch", cwd=_effective_workdir(workdir))
 
 
+async def _has_head(cwd: str | None) -> bool:
+    """``True`` when ``HEAD`` resolves to a commit in this repository."""
+    try:
+        await _run_git("rev-parse", "--verify", "--quiet", "HEAD", cwd=cwd)
+    except RuntimeError:
+        return False
+    return True
+
+
+async def _unborn_head(cwd: str | None) -> bool:
+    """``True`` only for a repository whose ``HEAD`` has no commit yet.
+
+    ``rev-parse --verify HEAD`` fails both before the first commit and outside
+    a repository altogether, so the ``symbolic-ref`` probe runs first: it
+    succeeds where ``HEAD`` points at an unborn branch and fails where there is
+    no repository, which leaves a missing repository to raise the error it
+    always did instead of being reported as an empty history.
+    """
+    try:
+        await _run_git("symbolic-ref", "--quiet", "HEAD", cwd=cwd)
+    except RuntimeError:
+        return False
+    return not await _has_head(cwd)
+
+
 async def _diff_revision(cwd: str | None) -> str | None:
     """``"HEAD"`` when the repository has a commit to diff against, else ``None``.
 
@@ -151,11 +176,7 @@ async def _diff_revision(cwd: str | None) -> str | None:
     drops the revision and lets ``--cached`` carry it rather than failing a
     diff that plain ``git diff`` used to answer.
     """
-    try:
-        await _run_git("rev-parse", "--verify", "--quiet", "HEAD", cwd=cwd)
-    except RuntimeError:
-        return None
-    return "HEAD"
+    return "HEAD" if await _has_head(cwd) else None
 
 
 def _git_diff_argv(a: dict[str, Any]) -> tuple[str, ...]:
@@ -266,7 +287,10 @@ async def git_commit(
 
 @tool(
     name="git_log",
-    description="Show recent git commit log.",
+    description=(
+        "Show recent git commit log. Reports ''(no commits yet)'' in a repository "
+        "with no first commit."
+    ),
     params={
         "count": {"type": "integer", "description": "Number of commits to show (default 10)."},
         "workdir": {"type": "string", "description": "Git repository directory (default: cwd)."},
@@ -279,10 +303,18 @@ async def git_commit(
     record_payload=False,
 )
 async def git_log(count: int = 10, workdir: str | None = None) -> str:
+    cwd = _effective_workdir(workdir)
+    # ``git log`` exits 128 on an unborn HEAD, so a freshly ``git init``-ed
+    # repository turned an ordinary "what did I just do?" question into a
+    # RuntimeError the model could only retry (#2502). ``git status`` already
+    # answers there ("No commits yet on main") and an empty history is not an
+    # error, so say so the way the CLI says it.
+    if await _unborn_head(cwd):
+        return "(no commits yet)"
     return await _run_git(
         "log",
         f"--max-count={count}",
         "--oneline",
         "--decorate",
-        cwd=_effective_workdir(workdir),
+        cwd=cwd,
     )
