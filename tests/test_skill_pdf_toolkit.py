@@ -96,6 +96,62 @@ def test_split_range_parsing() -> None:
     assert split.split_ranges("5-3") == [[3, 4, 5]]
 
 
+def test_split_ranges_tolerates_whitespace_around_bounds() -> None:
+    """``1 - 3`` is a range a human writes, and ``5-3`` stays normalized."""
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        import split  # type: ignore[import-not-found]
+    finally:
+        sys.path.pop(0)
+
+    assert split.split_ranges(" 1 - 3 , 5 ") == [[1, 2, 3], [5]]
+    assert split.split_ranges("5 - 3") == [[3, 4, 5]]
+
+
+@pytest.mark.parametrize("spec", ["abc", "1-3, abc", "-5", "5-", "1-", "1--3", "0", "1,0", "²"])
+def test_split_ranges_rejects_a_token_that_is_not_a_page_number(spec: str) -> None:
+    """Every spell that reached ``int()`` unguarded is named, not raised (#2498).
+
+    ``1--3`` used to be read as the range ``-3..1`` and ``²`` passes
+    ``str.isdigit`` while ``int`` still refuses it, so both belong here rather
+    than in the accepted forms.
+    """
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        import split  # type: ignore[import-not-found]
+    finally:
+        sys.path.pop(0)
+
+    with pytest.raises(split.PageSpecError, match="invalid page range specification"):
+        split.split_ranges(spec)
+
+
+def test_split_cli_reports_an_invalid_spec_with_exit_code_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The command from the report: a structured error, and nothing written."""
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        import split  # type: ignore[import-not-found]
+    finally:
+        sys.path.pop(0)
+
+    pdf_file = tmp_path / "sample.pdf"
+    _make_one_page_pdf(pdf_file, "TEST")
+    out_dir = tmp_path / "out"
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["split.py", str(pdf_file), "--pages", "1-3, abc", "--out", str(out_dir)],
+    )
+
+    assert split.main() == 2
+    captured = capsys.readouterr()
+    assert "invalid page range specification: 'abc'" in captured.err
+    assert not out_dir.exists()
+
+
 def test_merge_range_parsing() -> None:
     sys.path.insert(0, str(SCRIPTS))
     try:

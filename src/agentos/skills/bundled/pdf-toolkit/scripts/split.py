@@ -8,6 +8,10 @@ Usage:
 Pages past the end of the document are never written silently: the summary
 lists them under ``skipped_pages``, and a spec with no page in range is an
 error rather than an empty success.
+
+A token that is neither a positive page number nor a ``lo-hi`` range --
+``abc``, ``5-``, ``-5`` -- is a :class:`PageSpecError` reported as ``error:``
+and exit code 2 rather than a traceback.
 """
 
 from __future__ import annotations
@@ -21,6 +25,26 @@ from pathlib import Path
 from pypdf import PdfReader, PdfWriter
 
 
+class PageSpecError(ValueError):
+    """A ``--pages`` spec that cannot be read. Reported as ``error:`` / exit 2,
+    never as a traceback: the caller passed bad input, the script did not break."""
+
+
+def _page_number(text: str, token: str) -> int:
+    """The 1-based page number *text* names, or a `PageSpecError` for *token*.
+
+    ``text`` is one side of a token, so it is empty for the open-ended spells
+    (``5-`` and ``-5``) that used to reach ``int("")``. ``isascii`` is checked
+    alongside ``isdigit`` because ``isdigit`` accepts superscripts -- ``"²"``
+    is a digit and `int` still refuses it.
+    """
+    digits = text.strip()
+    page = int(digits) if digits.isascii() and digits.isdigit() else 0
+    if page < 1:
+        raise PageSpecError(f"invalid page range specification: {token!r}")
+    return page
+
+
 def split_ranges(spec: str) -> list[list[int]]:
     groups: list[list[int]] = []
     for token in spec.split(","):
@@ -29,12 +53,12 @@ def split_ranges(spec: str) -> list[list[int]]:
             continue
         if "-" in token:
             lo_s, hi_s = token.split("-", 1)
-            lo, hi = int(lo_s), int(hi_s)
+            lo, hi = _page_number(lo_s, token), _page_number(hi_s, token)
             if lo > hi:
                 lo, hi = hi, lo
             groups.append(list(range(lo, hi + 1)))
         else:
-            groups.append([int(token)])
+            groups.append([_page_number(token, token)])
     return groups
 
 
@@ -87,7 +111,11 @@ def main() -> int:
     if not args.input.is_file():
         print(f"error: input {args.input} not found", file=sys.stderr)
         return 2
-    result = split(args.input, args.pages, args.out)
+    try:
+        result = split(args.input, args.pages, args.out)
+    except PageSpecError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     if not result.parts:
         print(
             f"error: no page in {args.pages!r} exists in {args.input} ({result.total_pages} pages)",
