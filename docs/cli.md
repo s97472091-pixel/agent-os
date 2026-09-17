@@ -732,6 +732,57 @@ agentos memory raw-fallbacks show <path>
 
 Read: [`features/memory.md`](features/memory.md)
 
+## Migration from External Runtimes
+
+`agentos migrate` imports state from external agent runtimes (OpenClaw,
+Hermes Agent) into AgentOS-native files. Every invocation is a **dry-run
+preview by default** — nothing is written until you pass `--apply`.
+
+Auto-detect everything found under your home:
+
+```sh
+agentos migrate                 # scan ~/.openclaw and ~/.hermes
+agentos migrate --source openclaw,hermes --apply
+```
+
+When both sources are detected in a non-interactive context (CI, pipe,
+`--json`), the command prints what it found and exits without migrating —
+re-run with `--source openclaw,hermes` (or a subset) to opt in explicitly.
+In an interactive shell it opens a multi-select prompt instead.
+
+Migrate one runtime directly:
+
+```sh
+agentos migrate openclaw --json
+agentos migrate openclaw --apply
+agentos migrate hermes --json
+agentos migrate hermes --apply --profile work
+```
+
+| Flag | Purpose |
+| --- | --- |
+| `--apply` | Apply the migration. Without this flag, only a dry-run report is produced. |
+| `--source` | On bare `agentos migrate`: comma-separated source ids (`openclaw,hermes`). On a subcommand: the source home PATH (OpenClaw defaults to `~/.openclaw`). |
+| `--json` | Emit a machine-readable report. Recommended for dry runs. |
+| `--preset user-data\|full` | `user-data` migrates only persona, memory, and skills; `full` (default) adds supported config/runtime artifacts. |
+| `--skill-conflict skip\|overwrite\|rename` | How to handle imported skill name clashes (default `skip`). |
+| `--persona-conflict` | OpenClaw only: how to resolve SOUL/USER/AGENTS conflicts — `prompt` (default, interactive), `use-agentos`, `use-openclaw`, `merge`, or `skip`. |
+| `--profile` | Hermes only: migrate one profile under `~/.hermes/profiles`. |
+| `--include/--exclude` | Comma-separated migration option ids to include or exclude. |
+| `--config` | AgentOS config path to preview or write. |
+| `--migrate-secrets` | Copy recognized secrets such as API keys and channel tokens. Defaults to false — review the dry run first. |
+| `--overwrite` | Allow replacing existing targets. Overwritten items are backed up where supported. |
+
+Reports land under `~/.agentos/migration/<source>/<timestamp>/`
+(`report.json`, `summary.md`). Always preview with `--json` before
+`--apply`, and stop any running gateway using the target home first.
+
+Read:
+
+- [`../MIGRATION.md`](../MIGRATION.md)
+- [`operations.md`](operations.md#migration)
+
+
 ## Durable Agents and Scheduling
 
 ```sh
