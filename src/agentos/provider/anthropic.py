@@ -115,7 +115,11 @@ def _supports_document_blocks(model: str) -> bool:
     m = model.lower()
     if "haiku" in m:
         return False
-    return True
+    if "claude-3" not in m:
+        return True
+    # Claude 3.x: document support starts at 3.5 Sonnet — the original
+    # Claude 3 Opus/Sonnet SKUs reject a native ``document`` block with a 400.
+    return any(marker in m for marker in ("claude-3-5", "claude-3-7", "claude-3.5", "claude-3.7"))
 
 
 def _increment_document_block_rejected(code: str) -> None:

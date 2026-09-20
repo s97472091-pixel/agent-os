@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Anthropic provider: `_supports_document_blocks` only filtered `haiku`, so
+  the original Claude 3 Opus/Sonnet SKUs (which reject a native `document`
+  block with a 400) passed the gate and the payload builder sent a
+  `document` block instead of the documented text fallback. The pre-3.5
+  Claude 3 SKUs are now excluded; the 3.5/3.7/4.x families and the fail-open
+  behaviour for unrecognised models are unchanged. (#3245)
+
 ## [2026.9.20] - 2026-09-20
 
 ### Fixed
