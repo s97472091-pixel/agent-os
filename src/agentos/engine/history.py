@@ -59,9 +59,7 @@ def limit_turns(messages: list[Message], max_turns: int) -> list[Message]:
                 # so cut at the first non-excluded index, which is i+1 only if i+1 is a user msg.
                 # Simpler: scan forward from i+1 to find the next user message.
                 cut_index = i + 1
-                while cut_index < len(messages) and not _is_real_user_turn(
-                    messages[cut_index]
-                ):
+                while cut_index < len(messages) and not _is_real_user_turn(messages[cut_index]):
                     cut_index += 1
                 break
 
@@ -71,13 +69,22 @@ def limit_turns(messages: list[Message], max_turns: int) -> list[Message]:
     return messages[cut_index:]
 
 
+def _is_tool_use_block(block: Any) -> bool:
+    """True for blocks that carry a tool_use payload (ContentBlockToolUse)."""
+    return hasattr(block, "id") and hasattr(block, "name") and hasattr(block, "input")
+
+
+def _is_tool_result_block(block: Any) -> bool:
+    """True for blocks that carry a tool_result payload (ContentBlockToolResult)."""
+    return hasattr(block, "tool_use_id") and hasattr(block, "is_error")
+
+
 def _extract_tool_use_ids(content: Any) -> set[str]:
     """Extract tool_use IDs from message content."""
     ids: set[str] = set()
     if isinstance(content, list):
         for block in content:
-            # ContentBlockToolUse has 'id' field
-            if hasattr(block, "id") and hasattr(block, "name") and hasattr(block, "input"):
+            if _is_tool_use_block(block):
                 ids.add(block.id)
     return ids
 
@@ -87,7 +94,7 @@ def _extract_tool_result_ids(content: Any) -> set[str]:
     ids: set[str] = set()
     if isinstance(content, list):
         for block in content:
-            if hasattr(block, "tool_use_id") and hasattr(block, "is_error"):
+            if _is_tool_result_block(block):
                 ids.add(block.tool_use_id)
     return ids
 
@@ -100,6 +107,10 @@ def repair_tool_pairing(messages: list[Message]) -> list[Message]:
     ``tool_call_id``. A matching ID elsewhere in the transcript is not enough:
     ordinary user/context messages between the call and result still make the
     provider request invalid.
+
+    A message that mixes unpaired tool blocks with other content (text, images)
+    keeps that other content: only the unpaired tool_use/tool_result blocks are
+    pruned from it, and the message is dropped only when nothing else remains.
 
     Returns original list reference if no repairs needed.
     """
@@ -134,18 +145,34 @@ def repair_tool_pairing(messages: list[Message]) -> list[Message]:
             valid_tool_result_indices.update(result_indices)
 
     repaired: list[Message] = []
+    changed = False
     for index, message in enumerate(messages):
         use_ids = _extract_tool_use_ids(message.content)
         result_ids = _extract_tool_result_ids(message.content)
 
-        if use_ids and index not in valid_tool_call_indices:
-            continue
-        if result_ids and index not in valid_tool_result_indices:
+        drop_calls = bool(use_ids) and index not in valid_tool_call_indices
+        drop_results = bool(result_ids) and index not in valid_tool_result_indices
+        if not drop_calls and not drop_results:
+            repaired.append(message)
             continue
 
-        repaired.append(message)
+        # Mixed content: prune the unpaired tool blocks and keep the rest,
+        # instead of discarding the whole message (and its text) with them.
+        changed = True
+        kept: list[Any] = []
+        if isinstance(message.content, list):
+            kept = [
+                block
+                for block in message.content
+                if not (
+                    (drop_calls and _is_tool_use_block(block))
+                    or (drop_results and _is_tool_result_block(block))
+                )
+            ]
+        if kept:
+            repaired.append(message.model_copy(update={"content": kept}))
 
-    return messages if len(repaired) == len(messages) else repaired
+    return repaired if changed else messages
 
 
 def _coerce_tool_input(raw: Any) -> dict[str, Any]:

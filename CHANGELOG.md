@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Engine history: `repair_tool_pairing` no longer discards a message whole
+  when it carries an unpaired `tool_result`/`tool_use` block next to text
+  content — the unpaired tool blocks are pruned from the message and its
+  other content (text, images) is kept; the message is dropped only when
+  nothing but tool blocks remains. Previously a user message with an orphan
+  tool result next to text was deleted from the transcript entirely,
+  silently losing the text. (#3233)
+
 ## [2026.9.20] - 2026-09-20
 
 ### Fixed
