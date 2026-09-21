@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from openpyxl import load_workbook
+from openpyxl.cell.cell import MergedCell
 
 # Distinguishes {"value": null} from an op with no "value" key at all.
 # ``op.get("value")`` collapses both to None, which would make a malformed
@@ -149,6 +150,13 @@ def apply_ops(wb: Any, ops: list[dict[str, Any]]) -> int:
             # while this loop still counts the edit as applied. Fetching the
             # cell first also leaves its style untouched.
             cell = ws.cell(row=int(row), column=int(col))
+            if isinstance(cell, MergedCell):
+                # A covered cell (inside a merged range, not its top-left
+                # anchor) is read-only: assigning through it raises
+                # AttributeError and would abort the whole batch, losing every
+                # other op with it. Skip it like the loop's other invalid
+                # targets — it is not counted as applied.
+                continue
             cell.value = coerced
             if as_text and isinstance(coerced, str):
                 # Assigning a string that starts with ``=`` makes openpyxl mark

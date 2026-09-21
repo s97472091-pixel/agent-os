@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `xlsx` skill: `edit_xlsx.py` `set_cell` into a covered cell of a merged
+  range (any cell inside the merge other than its top-left anchor) crashed the
+  whole run with `AttributeError: 'MergedCell' object attribute 'value' is
+  read-only` — every other operation in the batch was lost and `--out` was
+  never written. A covered cell is now skipped like the loop's other invalid
+  targets, so the remaining ops still land. (#3277)
 - Skills (hub scanner): `_strip_fenced_code_blocks` only recognized exactly-
   three-backtick fences, so a `~~~`-fenced example (CommonMark-valid) was
   scanned as plain text and scored `severity="dangerous"` -- the same
