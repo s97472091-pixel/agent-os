@@ -511,6 +511,68 @@ def test_firecrawl_unsuccessful_body_is_an_error(monkeypatch: pytest.MonkeyPatch
     assert any("Insufficient credits" in e["reason"] for e in payload["errors"])
 
 
+# --- malformed engine payloads --------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"web": None},
+        {"web": []},
+        {"web": "oops"},
+        {"web": {"results": "oops"}},
+        {"web": {"results": {"a": 1}}},
+    ],
+    ids=["web-null", "web-list", "web-str", "results-str", "results-dict"],
+)
+def test_brave_non_list_collection_is_no_results(
+    monkeypatch: pytest.MonkeyPatch, payload: dict[str, object]
+) -> None:
+    """#3288: a null or non-list collection must not crash the brave engine."""
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "brave-key")
+    search = _import_search()
+    client = _FakeClient([_Response(payload=payload)])
+    monkeypatch.setattr(search, "_client", lambda: client)
+
+    assert search._brave_search("q", 5) == []
+
+
+def test_brave_null_web_reports_no_results_and_no_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Through search_all, {"web": null} contributes zero results and no error entry."""
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "brave-key")
+    search = _import_search()
+    client = _FakeClient([_Response(payload={"web": None})])
+    monkeypatch.setattr(search, "_client", lambda: client)
+
+    out = search.search_all(query="q", engines=["brave"], limit=5, strict=False)
+
+    assert out["results"] == []
+    assert out["errors"] == []
+
+
+@pytest.mark.parametrize(
+    ("engine", "env_name", "payload"),
+    [
+        ("tavily", "TAVILY_API_KEY", {"results": {"a": 1}}),
+        ("serpapi", "SERPAPI_API_KEY", {"organic_results": {"a": 1}}),
+        ("firecrawl", "FIRECRAWL_API_KEY", {"success": True, "data": {"web": {"a": 1}}}),
+    ],
+)
+def test_sibling_engines_non_list_collection_is_no_results(
+    monkeypatch: pytest.MonkeyPatch, engine: str, env_name: str, payload: dict[str, object]
+) -> None:
+    """#3288: the same crash shape in the sibling engines degrades to no results."""
+    monkeypatch.setenv(env_name, "k")
+    search = _import_search()
+    client = _FakeClient([_Response(payload=payload)])
+    monkeypatch.setattr(search, "_client", lambda: client)
+
+    out = search.search_all(query="q", engines=[engine], limit=5, strict=False)
+
+    assert out["results"] == []
+    assert out["errors"] == []
+
+
 # --- x (xAI x_search) -----------------------------------------------------------
 
 _X_PAYLOAD: dict[str, object] = {

@@ -169,6 +169,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   responses already used. The error-status check now runs first, so error
   bodies take the same path regardless of content type and transient
   statuses are not cached. (#3231)
+- `multi-search-engine`: a `null` or non-list result collection crashed the
+  engine instead of reading as no results — brave's `{"web": null}` raised
+  `AttributeError: 'NoneType' object has no attribute 'get'`, and a non-list
+  `results` / `organic_results` / `data.web` raised `KeyError: slice(...)` in
+  tavily, serpapi and firecrawl. The engine was reported as broken in
+  `errors` instead of contributing zero results (#3288).
 
 ## [2026.9.20] - 2026-09-20
 

@@ -68,6 +68,17 @@ def _client() -> httpx.Client:
     )
 
 
+def _as_list(value: object) -> list[Any]:
+    """Return *value* when it is a list, else an empty list.
+
+    Engine payloads are not trusted: a result collection can arrive as ``null``
+    (brave's ``{"web": null}``) or as another JSON type, and slicing or
+    iterating those raised AttributeError/KeyError — the engine was reported
+    as broken instead of contributing no results.
+    """
+    return value if isinstance(value, list) else []
+
+
 def _is_ddg_challenge(response: httpx.Response, soup: BeautifulSoup) -> bool:
     if response.status_code == _DDG_CHALLENGE_STATUS:
         return True
@@ -139,7 +150,8 @@ def _brave_search(query: str, limit: int) -> list[Result]:
         )
         response.raise_for_status()
         payload = response.json()
-        items = payload.get("web", {}).get("results", []) or []
+        web = payload.get("web")
+        items = _as_list(web.get("results")) if isinstance(web, dict) else []
         results: list[Result] = []
         for idx, item in enumerate(items[:limit], start=1):
             results.append(
@@ -170,7 +182,7 @@ def _tavily_search(query: str, limit: int) -> list[Result]:
         )
         response.raise_for_status()
         payload = response.json()
-        items = payload.get("results", []) or []
+        items = _as_list(payload.get("results"))
         results: list[Result] = []
         for idx, item in enumerate(items[:limit], start=1):
             results.append(
@@ -196,7 +208,7 @@ def _serpapi_search(query: str, limit: int) -> list[Result]:
         )
         response.raise_for_status()
         payload = response.json()
-        items = payload.get("organic_results", []) or []
+        items = _as_list(payload.get("organic_results"))
         results: list[Result] = []
         for idx, item in enumerate(items[:limit], start=1):
             results.append(
@@ -239,11 +251,11 @@ def _firecrawl_search(query: str, limit: int) -> list[Result]:
         payload = response.json()
         if not payload.get("success", True):
             raise RuntimeError(f"firecrawl: {payload.get('error') or 'unsuccessful response'}")
-        data = payload.get("data") or {}
         # v2 nests by source; v1 returned a flat list.
-        items = data.get("web", []) if isinstance(data, dict) else data
+        data = payload.get("data")
+        items = _as_list(data.get("web") if isinstance(data, dict) else data)
         results: list[Result] = []
-        for idx, item in enumerate((items or [])[:limit], start=1):
+        for idx, item in enumerate(items[:limit], start=1):
             results.append(
                 Result(
                     engine="firecrawl",
