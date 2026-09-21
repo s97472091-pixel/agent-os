@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from openpyxl import Workbook
+from openpyxl.worksheet.cell_range import CellRange
 
 # Bundled scripts run under AgentOS's own interpreter; the path insert only
 # matters in a source checkout where the package is not installed (#2804).
@@ -41,6 +42,31 @@ def _coerce(value: Any) -> Any:
         except ValueError:
             return value
     return value
+
+
+def _ranges_intersect(a: CellRange, b: CellRange) -> bool:
+    return not (
+        a.max_row < b.min_row
+        or a.min_row > b.max_row
+        or a.max_col < b.min_col
+        or a.min_col > b.max_col
+    )
+
+
+def _merge_or_reject(ws: Any, rng: str) -> None:
+    """Merge *rng*, rejecting a target that overlaps an existing merge.
+
+    A malformed range already raises from :class:`CellRange` — the pinned
+    contract for a bad spec — but an overlapping range used to be written
+    silently, leaving the workbook with intersecting merge ranges (invalid
+    content Excel repairs on open). It is rejected the same way so the spec
+    author learns about the collision instead of getting a corrupt workbook.
+    """
+    target = CellRange(rng)
+    for existing in ws.merged_cells.ranges:
+        if _ranges_intersect(target, existing):
+            raise ValueError(f"merge range {rng} overlaps existing merge range {existing}")
+    ws.merge_cells(rng)
 
 
 def build(spec: Any) -> Workbook:
@@ -77,13 +103,13 @@ def build(spec: Any) -> Workbook:
         if isinstance(raw_merged, (list, tuple)):
             for merged in raw_merged:
                 if isinstance(merged, str):
-                    ws.merge_cells(merged)
+                    _merge_or_reject(ws, merged)
                 elif (
                     isinstance(merged, dict)
                     and "range" in merged
                     and isinstance(merged["range"], str)
                 ):
-                    ws.merge_cells(merged["range"])
+                    _merge_or_reject(ws, merged["range"])
 
         freeze = sheet_spec.get("freeze")
         if isinstance(freeze, str) and freeze:

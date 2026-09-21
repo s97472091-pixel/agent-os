@@ -359,6 +359,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `answered`, and the node-fault paths in `read_start_tick` / `simulate_launch`
   say the endpoint refused the call and that it is retryable instead.
 
+- `xlsx` skill: `edit_xlsx.py`'s `merge_cells` op and `create_xlsx.py`'s
+  `merged` spec accepted a range that intersects an existing merge and wrote
+  it, leaving the workbook with invalid intersecting merge ranges (Excel
+  repairs such files on open) while the run reported success. Both scripts now
+  refuse the target with `ValueError("merge range … overlaps existing merge
+  range …")`, matching the loud-failure contract of the malformed-range path,
+  so the caller gets an exact message and nothing is written. (#3280)
+
+
 ## [2026.9.22.post1] - 2026-09-22
 
 ### Added

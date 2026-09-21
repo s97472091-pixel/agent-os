@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from openpyxl import load_workbook
+from openpyxl.worksheet.cell_range import CellRange
 
 # Bundled scripts run under AgentOS's own interpreter; the path insert only
 # matters in a source checkout where the package is not installed (#2804).
@@ -149,6 +150,32 @@ def _rename_sheet(wb: Any, old: str, new: str) -> bool:
     return True
 
 
+def _ranges_intersect(a: CellRange, b: CellRange) -> bool:
+    return not (
+        a.max_row < b.min_row
+        or a.min_row > b.max_row
+        or a.max_col < b.min_col
+        or a.min_col > b.max_col
+    )
+
+
+def _merge_or_reject(ws: Any, rng: str) -> None:
+    """Merge *rng*, refusing a target that overlaps an existing merge.
+
+    A malformed range already raises from :class:`CellRange` — the pinned
+    loud-failure contract for a bad op — but an overlapping range used to be
+    written silently, leaving the workbook with intersecting merge ranges
+    (invalid content Excel repairs on open) while the run reported success.
+    It is refused the same way so the caller gets an exact message to correct
+    against and nothing is written.
+    """
+    target = CellRange(rng)
+    for existing in ws.merged_cells.ranges:
+        if _ranges_intersect(target, existing):
+            raise ValueError(f"merge range {rng} overlaps existing merge range {existing}")
+    ws.merge_cells(rng)
+
+
 def apply_ops(wb: Any, ops: list[dict[str, Any]]) -> int:
     applied = 0
     for op in ops:
@@ -193,7 +220,7 @@ def apply_ops(wb: Any, ops: list[dict[str, Any]]) -> int:
             sheet_name = op.get("sheet")
             rng = op.get("range")
             if sheet_name in wb.sheetnames and isinstance(rng, str):
-                wb[sheet_name].merge_cells(rng)
+                _merge_or_reject(wb[sheet_name], rng)
                 applied += 1
     return applied
 
