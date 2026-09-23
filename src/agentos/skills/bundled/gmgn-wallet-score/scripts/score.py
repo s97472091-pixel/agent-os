@@ -49,8 +49,30 @@ def _f(v, default=0.0):
     try: return float(v)
     except (TypeError, ValueError): return default
 
+def _f_or_none(v):
+    """Floatify a value, returning None when the input is None/missing/invalid.
+
+    Used for windowed ratios such as `realized_profit_pnl` where a missing or
+    `None` value means "undefined" and must not be treated as 0.0.
+    """
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def _clamp(x, lo=0.0, hi=1.0):
     return lo if x < lo else hi if x > hi else x
+
+
+def _format_roi(v: float | None) -> str:
+    """Format an ROI ratio as a signed percentage, or 'n/a' when undefined."""
+    if v is None:
+        return "n/a"
+    return f"{v*100:+.1f}%"
+
 
 def _b(v):
     if isinstance(v, bool): return v
@@ -91,9 +113,16 @@ realized_profit = _f(stats_raw.get('realized_profit'))
 bought_cost      = _f(stats_raw.get('bought_cost', stats_raw.get('total_cost')))
 created_token_count = int(_f(common.get('created_token_count')))
 
+# ROI for the 7-day window is only defined when there is a positive cost basis in
+# that window. A wallet that sold a position bought before the window has a real
+# realized_profit but no window ROI, and must not be reported as "0.0%".
+raw_roi = _f_or_none(stats_raw.get('realized_profit_pnl', stats_raw.get('pnl')))
+if raw_roi is None and bought_cost > 0 and buy > 0:
+    raw_roi = realized_profit / bought_cost
+
 w = dict(
     realized_profit=realized_profit,
-    roi=_f(stats_raw.get('realized_profit_pnl', stats_raw.get('pnl'))),
+    roi=raw_roi,
     buy=buy, sell=sell, trades=trades,
     bought_cost=bought_cost,
     avg_buy_usd=(bought_cost / buy if buy else 0.0),
@@ -277,14 +306,24 @@ if not tags:
     add_tag("🧭", "普通交易者：没有特别突出的风格标签", "Regular trader: no standout style tags")
 
 # ── 5. Track-record score (is this trader actually good?) ──
+roi_defined = w['roi'] is not None
+# ROI factor is only meaningful when the window has a defined ROI; otherwise
+# it contributes nothing, letting the other factors carry the score.
 TRACK_W = dict(tail=0.34, upside=0.28, roi=0.16, win=0.10, size=0.12)
 tail_f    = 1 - dist['lt_n50'] / tn
 upside_f  = (dist['gt_5'] + dist['x2_5'] + dist['x0_2']) / tn
-roi_f     = _clamp((w['roi'] + 0.05) / 0.35)
+roi_f     = _clamp((w['roi'] + 0.05) / 0.35) if roi_defined else 0.0
 win_f     = _clamp(w['winrate'] / 0.5)
 size_f    = _clamp((tn - 20) / 300)
 track_facs = dict(tail=tail_f, upside=upside_f, roi=roi_f, win=win_f, size=size_f)
-track_score = round(100 * sum(TRACK_W[k] * _clamp(v) for k, v in track_facs.items()))
+# If ROI is undefined, remove its weight from the denominator so the score
+# is not anchored to a fabricated zero factor.
+if not roi_defined:
+    del track_facs['roi']
+track_weight = {k: v for k, v in TRACK_W.items() if k in track_facs}
+active_weight = sum(track_weight.values())
+track_weight = {k: v / active_weight for k, v in track_weight.items()}
+track_score = round(100 * sum(track_weight[k] * _clamp(v) for k, v in track_facs.items()))
 TRACK_LABELS = dict(tail=_('止损纪律','Stop-loss discipline'), upside=_('盈利面','Profit share'),
                      roi=_('资金回报','Capital ROI'), win=_('胜率','Win rate'), size=_('样本量','Sample size'))
 
@@ -309,23 +348,35 @@ track_disp = round(track_score * SELF_DEAL_DISCOUNT) if self_dealing else track_
 copy_disp  = round(copy_score  * SELF_DEAL_DISCOUNT) if self_dealing else copy_score
 
 # ── 7. Copy-trade backtest ───────────────────────────────────
-wallet_pct = (w['realized_profit'] / w['bought_cost']) if w['bought_cost'] > 0 else w['roi']
+# wallet_pct is the 7-day return. It is only defined when the window has a
+# positive cost basis; otherwise we report the backtest as undefined rather
+# than fabricating a 0% return for a wallet that may have real realized profit.
+if w['bought_cost'] > 0:
+    wallet_pct = w['realized_profit'] / w['bought_cost']
+else:
+    wallet_pct = w['roi']
 # clamp: dev wallets have near-zero bought_cost, so the ratio blows up. No
 # `or 0.0001` floor here: wallet_pct is always a float, so `or` only ever fired
 # on an exact 0.0 -- a real 0% ROI -- and 0.0001 then became the divisor below,
 # turning a break-even wallet into a six-figure loss. A genuine 0.0 belongs in
 # the `else 0.0` branch of copy_7d.
-wallet_pct = _clamp(wallet_pct, -0.9, 3.0)
+wallet_pct = _clamp(wallet_pct, -0.9, 3.0) if wallet_pct is not None else None
 LOW_MCAP_DRIFT_PER_S = 0.015
 drift_per_s = LOW_MCAP_DRIFT_PER_S * (0.3 + 0.7 * summ['entry_under_100k'])
 drift = LATENCY_S * drift_per_s
 slip = 2 * SLIPPAGE_PCT
 gas_pct = (GAS_USD / w['avg_buy_usd']) if w['avg_buy_usd'] > 0 else 0.0
-copy_pct = wallet_pct - drift - slip - gas_pct
-copy_7d = w['realized_profit'] * (copy_pct / wallet_pct) if wallet_pct else 0.0
-bt = dict(wallet_pct=round(wallet_pct,4), copy_pct=round(copy_pct,4), drift=round(drift,4),
-          slip=round(slip,4), gas_pct=round(gas_pct,4), wallet_7d=round(w['realized_profit'],1),
-          copy_7d=round(copy_7d,1), trap=round(w['realized_profit']-copy_7d,1))
+if wallet_pct is None:
+    copy_7d = None
+    bt = dict(wallet_pct=None, copy_pct=None, drift=round(drift,4),
+              slip=round(slip,4), gas_pct=round(gas_pct,4), wallet_7d=round(w['realized_profit'],1),
+              copy_7d=None, trap=None)
+else:
+    copy_pct = wallet_pct - drift - slip - gas_pct
+    copy_7d = w['realized_profit'] * (copy_pct / wallet_pct) if wallet_pct else 0.0
+    bt = dict(wallet_pct=round(wallet_pct,4), copy_pct=round(copy_pct,4), drift=round(drift,4),
+              slip=round(slip,4), gas_pct=round(gas_pct,4), wallet_7d=round(w['realized_profit'],1),
+              copy_7d=round(copy_7d,1), trap=round(w['realized_profit']-copy_7d,1))
 
 # ── 8. Verdict ────────────────────────────────────────────────
 ts, cs = track_disp, copy_disp
@@ -337,6 +388,11 @@ if dev is not None:
     else:
         v_emoji, v_text = "🟡", _( f"发币方钱包，Dev 信誉 {ds}/100 —— 看它的存活率与安全记录再决定是否跟它的新盘。",
                                     f"Token-creator wallet, Dev reputation {ds}/100 — check survival rate and security record before following its new launches.")
+elif not roi_defined:
+    # A wallet with undefined 7-day ROI cannot be confidently scored as good,
+    # bad, or even middling. The track-record score still uses non-ROI factors,
+    # so we report the missing window rather than a false verdict.
+    v_emoji, v_text = "⚪", _("7天 ROI 数据不足（窗口无成本基数），无法给出总体评价", "7-day ROI undefined (no cost basis in window); cannot issue a verdict")
 elif ts >= 65 and cs < 35:
     v_emoji, v_text = "⚠️", _( "高战绩、低可跟单 —— 学它的止损纪律，别抄它的入场；延迟和滑点会把薄利吃成负。",
                                 "High track record, low copy-tradeability — learn the stop-loss discipline, don't copy the entries; latency and slippage will turn thin profit negative.")
@@ -363,7 +419,7 @@ print()
 
 sec = _("📊 近7天战绩", "📊 7D Trading Stats")
 print(f"━━  {sec}  {'━'*(54-len(sec))}")
-print(f"  {_('已实现盈亏','Realized P&L')} {usd(w['realized_profit'])}   ROI {w['roi']*100:+.1f}%   "
+print(f"  {_('已实现盈亏','Realized P&L')} {usd(w['realized_profit'])}   ROI {_format_roi(w['roi'])}   "
       f"{_('胜率','Win rate')} {w['winrate']*100:.0f}%   {_('笔数','Trades')} {trades} ({buy}{_('买','buy')}/{sell}{_('卖','sell')})")
 print(f"  {_('交易币数','Tokens traded')} {token_num}   {_('均持仓','Avg hold')} {fmt_dur(w['avg_hold_s'])}   "
       f"{_('均单笔建仓','Avg position')} {usd(w['avg_buy_usd'])}")
@@ -383,7 +439,7 @@ sec = _("🎯 真实战绩分（这交易员是不是真有本事）", "🎯 Tra
 print(f"━━  {sec}  {'━'*(max(0,54-len(sec)))}")
 print(f"  {track_disp}/100")
 for k, v in track_facs.items():
-    print(f"    · {TRACK_LABELS[k]:14s}  {round(100*_clamp(v)):3d}/100   ({_('权重','w')} {TRACK_W[k]:.0%})")
+    print(f"    · {TRACK_LABELS[k]:14s}  {round(100*_clamp(v)):3d}/100   ({_('权重','w')} {track_weight[k]:.0%})")
 print()
 
 sec = _("🚀 可跟单分（你跟进后能拿到多少）", "🚀 Copy-Tradeability Score (can YOU capture it?)")
@@ -396,11 +452,14 @@ print()
 sec = _("🧮 跟单回测", "🧮 Copy-Trade Backtest")
 print(f"━━  {sec}  {'━'*(max(0,54-len(sec)))}")
 print(f"  {_('假设','Assuming')}: {_('延迟','latency')} {LATENCY_S:.1f}s   {_('单边滑点','one-sided slippage')} {SLIPPAGE_PCT:.1%}   {_('每笔gas','gas/trade')} {usd(GAS_USD)}")
-print(f"  {_('钱包本人单笔收益率','Wallet per-trade return')}  {bt['wallet_pct']*100:+.1f}%")
-print(f"  {_('- 延迟漂移','- latency drift')}  {bt['drift']*100:.2f}pp    {_('- 双边滑点','- round-trip slippage')}  {bt['slip']*100:.2f}pp    {_('- gas占比','- gas cost')}  {bt['gas_pct']*100:.2f}pp")
-print(f"  {_('= 跟单后单笔收益率','= your per-trade return')}  {bt['copy_pct']*100:+.1f}%")
-print()
-print(f"  7D  {_('钱包本人','wallet')} {usd(bt['wallet_7d'])}  →  {_('跟单预估','copy estimate')} {usd(bt['copy_7d'])}   ({_('抄单损耗','execution drag')} {usd(bt['trap'])})")
+if bt['wallet_pct'] is None:
+    print(f"  {_('7天收益率','7-day return')} n/a   {_('（窗口无成本基数，无法计算跟单回报）','(cost basis missing — copy return undefined)')}")
+else:
+    print(f"  {_('钱包本人单笔收益率','Wallet per-trade return')}  {bt['wallet_pct']*100:+.1f}%")
+    print(f"  {_('- 延迟漂移','- latency drift')}  {bt['drift']*100:.2f}pp    {_('- 双边滑点','- round-trip slippage')}  {bt['slip']*100:.2f}pp    {_('- gas占比','- gas cost')}  {bt['gas_pct']*100:.2f}pp")
+    print(f"  {_('= 跟单后单笔收益率','= your per-trade return')}  {bt['copy_pct']*100:+.1f}%")
+    print()
+    print(f"  7D  {_('钱包本人','wallet')} {usd(bt['wallet_7d'])}  →  {_('跟单预估','copy estimate')} {usd(bt['copy_7d'])}   ({_('抄单损耗','execution drag')} {usd(bt['trap'])})")
 if not has_mcap_data:
     print(f"  ⚠️ {_('未取到进场市值数据，延迟漂移按中性假设估算，可能失真','Entry mcap data unavailable — latency drift uses a neutral assumption and may be inaccurate')}")
 print()
