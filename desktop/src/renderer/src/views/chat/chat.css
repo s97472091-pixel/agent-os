@@ -210,8 +210,8 @@
   font-family: var(--font-sans);
   overflow-wrap: anywhere;
 }
-/* The renderer stamps data-sender/data-time; the desktop shows neither in
-   the flow. Time appears as a hover tooltip on the row's outer edge. */
+/* The renderer stamps data-sender/data-time; the desktop shows the time in
+   the gutter as a persistent timestamp rather than a hover tooltip. */
 .msg:not(:has(.msg-header))::before {
   content: none;
 }
@@ -223,7 +223,7 @@
   font-size: 10.5px;
   font-variant-numeric: tabular-nums;
   color: var(--dim);
-  opacity: 0;
+  opacity: 1;
   pointer-events: none;
   transition: opacity 120ms ease;
 }
@@ -234,9 +234,6 @@
 .msg.user::after {
   right: -8px;
   translate: 100% -50%;
-}
-.msg:hover::after {
-  opacity: 1;
 }
 .msg-header {
   display: none;
@@ -466,30 +463,26 @@
   font-family: var(--font-mono);
 }
 
-/* Turn footer: hidden until the row is hovered, then one quiet mono line. */
+/* Turn footer: a quiet mono line that is always visible once the turn has
+   completed. It stays hidden while the row is still streaming. */
 .msg-meta {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px 10px;
-  height: 0;
-  margin-top: 0;
+  height: auto;
+  min-height: 16px;
+  margin-top: 4px;
   overflow: hidden;
   font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--dim);
-  opacity: 0;
-  transition:
-    opacity 120ms ease,
-    height 120ms ease,
-    margin-top 120ms ease;
+  opacity: 1;
+  transition: opacity 120ms ease;
   user-select: text;
 }
-.msg:hover .msg-meta,
-.msg:focus-within .msg-meta {
-  height: 16px;
-  margin-top: 4px;
-  opacity: 1;
+.msg.streaming .msg-meta {
+  display: none;
 }
 .msg-meta__tokens,
 .msg-meta__cost,
@@ -557,9 +550,8 @@
   display: none;
 }
 /* Room at the end of the line so a long figure never runs under the glyphs.
-   Only while hovered: the two appear together, so nothing shifts. */
-.msg:hover .msg-meta,
-.msg:focus-within .msg-meta {
+   This padding is always reserved now that the meta line is always visible. */
+.msg-meta {
   padding-right: 48px;
 }
 .msg-action {

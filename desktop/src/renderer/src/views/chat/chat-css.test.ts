@@ -44,6 +44,17 @@ describe('desktop chat CSS geometry contract', () => {
     expect(sideMin).toBeGreaterThanOrEqual(44)
   })
 
+  it('keeps the response meta visible and stable', () => {
+    // Regression for #3392: the per-turn footer (and gutter timestamp) used to
+    // be hidden until hover, which made the transcript jump 20px every time the
+    // pointer crossed a row. The footer should be a stable part of the layout.
+    expect(css).toMatch(/\.msg-meta \{[\s\S]*?opacity: 1;/)
+    expect(css).not.toMatch(/\.msg:hover \.msg-meta,[\s\S]*?\.msg:focus-within \.msg-meta \{/)
+    expect(css).toMatch(/\.msg-meta \{[\s\S]*?padding-right: 48px;/)
+    expect(css).toMatch(/\.msg::after \{[\s\S]*?opacity: 1;/)
+    expect(css).toMatch(/\.msg\.streaming \.msg-meta \{[\s\S]*?display: none;/)
+  })
+
   it('keeps the jump-to-latest dock out of the transcript layout', () => {
     const dock = css.match(/\.chat-jump-dock \{[\s\S]*?\n\}/)?.[0]
     expect(dock).toMatch(/height: 0;/)
