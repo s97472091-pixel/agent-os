@@ -401,8 +401,8 @@ export function MenuItem({
 }
 
 /**
- * A row that opens a panel to its side. Opens on hover (after a beat),
- * click, Right or Return; the current value can show beside the chevron.
+ * A row that opens a panel to its side. Opens on hover, click, Right or
+ * Return; the current value can show beside the chevron.
  */
 export function MenuSub({
   icon: Icon,
@@ -421,7 +421,6 @@ export function MenuSub({
   const wrapRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const [side, setSide] = useState<'right' | 'left'>('right')
-  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [focusFirst, setFocusFirst] = useState(false)
 
   useLayoutEffect(() => {
@@ -435,13 +434,6 @@ export function MenuSub({
       setFocusFirst(false)
     }
   }, [open, focusFirst])
-
-  useEffect(
-    () => () => {
-      if (hoverTimer.current) clearTimeout(hoverTimer.current)
-    },
-    [],
-  )
 
   const openNow = (withFocus: boolean) => {
     setFocusFirst(withFocus)
@@ -458,12 +450,7 @@ export function MenuSub({
         className="mac-menu__item"
         data-active={open}
         onPointerEnter={() => {
-          if (open) return
-          hoverTimer.current = setTimeout(() => openNow(false), 110)
-        }}
-        onPointerLeave={() => {
-          if (hoverTimer.current) clearTimeout(hoverTimer.current)
-          hoverTimer.current = null
+          if (!open) openNow(false)
         }}
         onClick={() => (open ? ctx.setOpenSub(null) : openNow(true))}
         onKeyDown={(e) => {

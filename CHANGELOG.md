@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Desktop: the Sessions view menu (the sliders button) answers the pointer
+  immediately — a row highlights and its submenu opens the moment the
+  pointer arrives instead of a beat later, the submenu no longer fades in,
+  and the popover entry animation is shorter. The grace that keeps an open
+  submenu alive through a diagonal move into it is unchanged.
+
 ## [2026.9.24.post1] - 2026-09-24
 
 ### Fixed

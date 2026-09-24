@@ -15,7 +15,7 @@
     0 0 0 0.5px var(--border),
     0 12px 32px rgba(0, 0, 0, 0.32),
     0 2px 6px rgba(0, 0, 0, 0.16);
-  animation: mac-menu-in 120ms cubic-bezier(0.32, 0.72, 0, 1);
+  animation: mac-menu-in 80ms cubic-bezier(0.32, 0.72, 0, 1);
   transform-origin: top right;
   user-select: none;
 }
@@ -158,16 +158,10 @@
   left: calc(100% + 2px);
   z-index: 1;
   transform-origin: top left;
-  animation-name: mac-submenu-in;
+  animation: none;
 }
 .mac-menu__sub[data-side='left'] > .mac-menu {
   left: auto;
   right: calc(100% + 2px);
   transform-origin: top right;
-}
-@keyframes mac-submenu-in {
-  from {
-    opacity: 0;
-    transform: translateX(-2px);
-  }
 }
