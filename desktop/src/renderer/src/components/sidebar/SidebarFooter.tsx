@@ -1,10 +1,13 @@
-import { Bot, Home, MoreHorizontal, PenSquare, RefreshCw } from 'lucide-react'
-import { NavLink } from 'react-router'
+import { useQueryClient } from '@tanstack/react-query'
+import { Bot, Home, PenSquare, RefreshCw } from 'lucide-react'
+import { NavLink, useNavigate } from 'react-router'
 import type { GatewayState } from '@shared/gateway'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
 import { cn } from '~/lib/utils'
+import { sessionPath } from '~/components/sidebar/SessionList'
 import { useGateway } from '~/stores/gateway'
+import { webchatSessionKey, agentIdFromSessionKey } from '@/views/chat/logic'
 
 const LIGHT: Record<GatewayState, string> = {
   stopped: 'text-dim',
@@ -14,15 +17,31 @@ const LIGHT: Record<GatewayState, string> = {
   error: 'text-danger',
 }
 
+function genSessionKey(currentKey: string): string {
+  const suffix = Math.random().toString(36).slice(2, 10)
+  return webchatSessionKey(agentIdFromSessionKey(currentKey) || 'main', suffix)
+}
+
 /**
  * Icon strip at the bottom of the sidebar. The gateway light lives here as a
  * button: one glance for state, one click to start or stop.
  */
 export function SidebarFooter() {
   const { status, busy, start, stop } = useGateway()
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const running = status.state === 'running' || status.state === 'starting'
   const pulsing = status.state === 'starting' || status.state === 'stopping'
   const label = running ? t('gateway.stop') : t('gateway.start')
+
+  const startNewChat = () => {
+    const key = genSessionKey(webchatSessionKey('main'))
+    void navigate(sessionPath(key), { replace: true })
+  }
+
+  const refreshSessions = () => {
+    void queryClient.invalidateQueries({ queryKey: ['sessions'] })
+  }
 
   return (
     <div className="app-no-drag flex items-center gap-0.5 border-t border-hairline px-2 py-1.5">
@@ -40,10 +59,22 @@ export function SidebarFooter() {
           </span>
         )}
       </NavLink>
-      <Button variant="ghost" size="icon" aria-label={t('sidebar.new')} title={t('sidebar.new')}>
+      <Button
+        variant="ghost"
+        size="icon"
+        aria-label={t('sidebar.new')}
+        title={t('sidebar.new')}
+        onClick={startNewChat}
+      >
         <PenSquare className="size-4 text-muted-foreground" strokeWidth={1.75} aria-hidden />
       </Button>
-      <Button variant="ghost" size="icon" aria-label={t('sidebar.sync')} title={t('sidebar.sync')}>
+      <Button
+        variant="ghost"
+        size="icon"
+        aria-label={t('sidebar.sync')}
+        title={t('sidebar.sync')}
+        onClick={refreshSessions}
+      >
         <RefreshCw className="size-4 text-muted-foreground" strokeWidth={1.75} aria-hidden />
       </Button>
       <div className="flex-1" />
@@ -63,9 +94,6 @@ export function SidebarFooter() {
             aria-hidden
           />
         </span>
-      </Button>
-      <Button variant="ghost" size="icon" aria-label={t('sidebar.more')} title={t('sidebar.more')}>
-        <MoreHorizontal className="size-4 text-muted-foreground" strokeWidth={1.75} aria-hidden />
       </Button>
     </div>
   )
