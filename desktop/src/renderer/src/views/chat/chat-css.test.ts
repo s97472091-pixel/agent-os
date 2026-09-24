@@ -50,4 +50,17 @@ describe('desktop chat CSS geometry contract', () => {
     expect(dock).toMatch(/pointer-events: none;/)
     expect(css).toMatch(/\.chat-jump-dock\[data-visible='false'\] \{[\s\S]*?visibility: hidden;/)
   })
+
+  it('styles the image-route footer inside the model picker popover', () => {
+    // Regression for #3388: the image-route footer in the desktop model picker
+    // was unstyled, overlapping the list and surrounding UI. It needs to sit
+    // below the scrollable list, separated by a hairline, with the tier and model
+    // laid out as two spaced labels.
+    expect(css).toMatch(/\.chat-route-menu \{[\s\S]*?display: flex;/)
+    expect(css).toMatch(/\.chat-route-menu \{[\s\S]*?flex-direction: column;/)
+    expect(css).toMatch(/\.chat-route-image \{[\s\S]*?border-top: 1px solid var\(--hairline\);/)
+    expect(css).toMatch(/\.chat-route-image__row \{[\s\S]*?display: flex;/)
+    expect(css).toMatch(/\.chat-route-image__row \{[\s\S]*?gap: 8px;/)
+    expect(css).toMatch(/\.chat-route-image__tier \{[\s\S]*?flex: none;/)
+  })
 })
