@@ -1,9 +1,11 @@
+import { readFileSync } from 'node:fs'
 import { fireEvent, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { renderDesk, WALLET } from '../test-utils'
 import { ComposerSeats } from './ComposerSeats'
 import { StatusStrip } from './StatusStrip'
 
+const deskCss = readFileSync('src/renderer/src/views/trading/desk/desk.css', 'utf8')
 const pill = { mode: 'trading' as const, onSwitchMode: vi.fn() }
 
 describe('StatusStrip', () => {
@@ -86,6 +88,44 @@ describe('StatusStrip', () => {
     expect(onSwitchMode).toHaveBeenCalledWith('trading')
     fireEvent.keyDown(screen.getByTestId('mode-pill'), { key: 'ArrowRight' })
     expect(onSwitchMode).toHaveBeenCalledTimes(2)
+  })
+})
+
+// The pill used to wear a rotating conic edge and a lime dot beside
+// "Trading". The edge read as the running-session indicator — the same
+// "still processing" signal as mac-live-orbit — and the dot's meaning was
+// not obvious, so both are gone. The busy state lives in the status word.
+describe('ModePill', () => {
+  it('carries no live dot beside Trading — the status word is the busy signal', () => {
+    renderDesk(
+      <StatusStrip
+        mode="trading"
+        onSwitchMode={vi.fn()}
+        missions={[]}
+        running={new Set()}
+        sessionPending={2}
+        globalPending={0}
+        streaming={true}
+      />,
+    )
+    // The desk is busy here, so the old dot would have worn its halo.
+    expect(screen.getByTestId('status-word')).toHaveTextContent('Awaiting')
+    expect(screen.getByTestId('mode-pill').querySelector('.trd-pill__dot')).toBeNull()
+    expect(document.querySelector('.trd-pill__dot')).toBeNull()
+    expect(screen.getByTestId('mode-pill').querySelector('[data-live]')).toBeNull()
+  })
+
+  it('rests without a looping animation — the rotating edge is gone', () => {
+    expect(deskCss).not.toMatch(/trd-pill-run|trd-pill-angle/)
+    expect(deskCss).not.toMatch(/\.trd-pill::before|\.trd-pill::after/)
+    expect(deskCss).not.toMatch(/\.trd-pill__dot/)
+  })
+
+  it('keeps the sliding thumb and the one-shot entrance highlight', () => {
+    expect(deskCss).toMatch(/\.trd-pill__thumb \{[\s\S]*?transition: transform/)
+    expect(deskCss).toMatch(
+      /\.mode-shell\[data-enter='trading'\] \.trd-pill \{[\s\S]*?animation: desk-pulse/,
+    )
   })
 })
 

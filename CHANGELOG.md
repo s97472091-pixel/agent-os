@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Desktop: the Chat / Trading switch rests still — the rotating edge light
+  and the dot beside "Trading" are gone, so nothing on the pill can be read
+  as a running session. A switch slides the thumb, entering Trading keeps
+  its one-shot highlight, and a busy desk says so in the status word beside
+  the pill.
+
 ## [2026.9.24.post1] - 2026-09-24
 
 ### Fixed

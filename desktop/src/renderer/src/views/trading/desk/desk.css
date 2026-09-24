@@ -1397,16 +1397,9 @@ body[data-dragging] .trd-book__handle {
   gap: 10px;
 }
 /* The pill is the control the switch is made with, so it is sized to be the
-   object you aim at in the strip, and a light runs its edge. That light is
-   the one standing exception to "nothing ambient" — it is what tells you this
-   row holds a mode, not a label. The travelling angle is a registered custom
-   property so the sweep animates on one small element instead of repainting
-   a gradient across the strip. */
-@property --trd-pill-angle {
-  syntax: '<angle>';
-  initial-value: 0deg;
-  inherits: false;
-}
+   object you aim at in the strip. It carries no ambient animation: a switch
+   slides the thumb and entering Trading gets the one-shot pulse below, so
+   nothing on the pill at rest can be read as a running session. */
 .trd-pill {
   position: relative;
   display: inline-grid;
@@ -1414,51 +1407,9 @@ body[data-dragging] .trd-book__handle {
   grid-auto-columns: 1fr;
   height: 38px;
   padding: 4px;
-  /* Neutral while it is only a chat switch; lime once it is the desk's, so
-     the rationed colour still means "this is live money". */
-  --trd-pill-glow: color-mix(in srgb, var(--foreground) 72%, transparent);
   border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--foreground) 7%, transparent);
   box-shadow: inset 0 0 0 0.5px var(--hairline);
-}
-.trd-pill[data-mode='trading'] {
-  --trd-pill-glow: var(--primary);
-}
-
-/* The running edge, twice: a crisp 1.5 px ring (::before) and the same arc
-   blurred out behind it (::after) so it reads as light rather than paint.
-   Both are ring-only — the conic fill is masked down to the padding box —
-   and both sit under the wordmarks, which own z-index 1. */
-.trd-pill::before,
-.trd-pill::after {
-  content: '';
-  position: absolute;
-  inset: -1px;
-  border-radius: var(--radius-pill);
-  padding: 1.5px;
-  pointer-events: none;
-  background: conic-gradient(
-    from var(--trd-pill-angle),
-    transparent 0deg 210deg,
-    color-mix(in srgb, var(--trd-pill-glow) 28%, transparent) 288deg,
-    var(--trd-pill-glow) 344deg,
-    color-mix(in srgb, var(--trd-pill-glow) 28%, transparent) 352deg,
-    transparent 360deg
-  );
-  mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  animation: trd-pill-run 3.2s linear infinite;
-}
-.trd-pill::after {
-  filter: blur(5px);
-  opacity: 0.85;
-}
-@keyframes trd-pill-run {
-  to {
-    --trd-pill-angle: 360deg;
-  }
 }
 .trd-pill__thumb {
   position: absolute;
@@ -1496,19 +1447,6 @@ body[data-dragging] .trd-book__handle {
 .trd-pill__seg:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: -2px;
-}
-.trd-pill__dot {
-  width: 6px;
-  height: 6px;
-  border-radius: var(--radius-pill);
-  background: var(--dim);
-  transition: background-color 150ms ease-out;
-}
-.trd-pill[data-mode='trading'] .trd-pill__dot {
-  background: var(--primary);
-}
-.trd-pill__dot[data-live] {
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 22%, transparent);
 }
 
 /* ── Gate banner (over the chat, never instead of it) ───────────────────── */
@@ -1844,16 +1782,6 @@ body[data-dragging] .trd-book__handle {
   }
   .trd-pill__thumb {
     transition: none;
-  }
-  /* The ring stays — it is the control's identity, not a flourish — but it
-     stops travelling and rests as an even hairline of the same light. */
-  .trd-pill::before {
-    animation: none !important;
-    background: var(--trd-pill-glow);
-    opacity: 0.55;
-  }
-  .trd-pill::after {
-    display: none;
   }
 }
 
