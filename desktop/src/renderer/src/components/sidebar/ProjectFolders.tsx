@@ -1,12 +1,13 @@
 import '~/views/projects/projects.css'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { ChevronRight, Folder, Plus } from 'lucide-react'
-import { useEffect, useRef, useState, type DragEvent } from 'react'
+import { ChevronRight, Folder, MoreHorizontal, Pencil, Plus, Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState, type DragEvent, type KeyboardEvent } from 'react'
 import { NavLink, useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { useRpc } from '@/app/providers'
 import { projectId, projectName, type RawProject } from '@/views/projects/logic'
+import { PopMenu, type MenuPlace } from '~/components/menu/PopMenu'
 import { t } from '~/i18n'
 import { quick } from '~/lib/motion'
 import { errorText, invalidateProjects, useAgents, useMoveSession } from '~/stores/projects'
@@ -69,6 +70,72 @@ export function ProjectFolders({
   )
 }
 
+function useProjectActions(project: RawProject) {
+  const rpc = useRpc()
+  const queryClient = useQueryClient()
+  const id = projectId(project)
+  const name = projectName(project)
+  const rawUpdated = Number(project.updated_at ?? project.updatedAt)
+
+  const update = useMutation({
+    mutationFn: (vars: { name?: string; knowledge?: string; expected: number }) =>
+      rpc.call<{ project?: RawProject }>('projects.update', {
+        projectId: id,
+        ...(vars.name !== undefined ? { name: vars.name } : {}),
+        ...(vars.knowledge !== undefined ? { knowledge: vars.knowledge } : {}),
+        expectedUpdatedAt: vars.expected,
+      }),
+    onSuccess: (data) => {
+      if (data?.project) {
+        queryClient.setQueryData<{ projects?: RawProject[] }>(['projects'], (prev) =>
+          prev
+            ? {
+                ...prev,
+                projects: (prev.projects ?? []).map((p) =>
+                  projectId(p) === id ? { ...p, ...data.project } : p,
+                ),
+              }
+            : prev,
+        )
+      }
+      invalidateProjects(queryClient)
+    },
+    onError: (err) => {
+      const code = (err as { code?: string }).code
+      if (code === 'project.conflict') {
+        toast.error(t('projects.toast.conflict'), { id: 'projects-update-err' })
+      } else {
+        toast.error(`${t('projects.toast.saveFailed')}: ${errorText(err)}`, {
+          id: 'projects-update-err',
+        })
+      }
+    },
+  })
+
+  const remove = useMutation({
+    mutationFn: () => rpc.call('projects.delete', { projectId: id }),
+    onSuccess: () => {
+      toast.success(t('projects.toast.deleted'), { id: 'projects-delete' })
+      invalidateProjects(queryClient)
+    },
+    onError: (err) =>
+      toast.error(`${t('projects.toast.deleteFailed')}: ${errorText(err)}`, {
+        id: 'projects-delete-err',
+      }),
+  })
+
+  const rename = useCallback(
+    (next: string) => {
+      const clean = normalizeName(next)
+      if (!clean || clean === name) return
+      update.mutate({ name: clean, expected: rawUpdated })
+    },
+    [update, name, rawUpdated],
+  )
+
+  return { rename, remove: remove.mutate, isPending: update.isPending || remove.isPending }
+}
+
 function FolderRow({ project, rows }: { project: RawProject; rows: SessionRow[] }) {
   const id = projectId(project)
   const name = projectName(project)
@@ -79,6 +146,14 @@ function FolderRow({ project, rows }: { project: RawProject; rows: SessionRow[] 
   const { move } = useMoveSession()
   const [over, setOver] = useState(false)
   const { shown, hidden } = folderPreview(rows)
+  const { rename, remove, isPending } = useProjectActions(project)
+
+  const [menu, setMenu] = useState<MenuPlace | null>(null)
+  const [renaming, setRenaming] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const moreRef = useRef<HTMLButtonElement>(null)
+  const rowRef = useRef<HTMLDivElement>(null)
+  const closeMenu = useCallback(() => setMenu(null), [])
 
   function onDragOver(e: DragEvent) {
     if (!hasSessionDrag(e)) return
@@ -97,14 +172,31 @@ function FolderRow({ project, rows }: { project: RawProject; rows: SessionRow[] 
     setOpen(id, true)
   }
 
+  function onContextMenu(e: React.MouseEvent) {
+    e.preventDefault()
+    setMenu({ at: { x: e.clientX, y: e.clientY } })
+  }
+
+  function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) {
+      e.preventDefault()
+      const rect = rowRef.current?.getBoundingClientRect()
+      if (rect) setMenu({ anchor: rect, align: 'start' })
+    }
+  }
+
   return (
     <div className="proj-folder" data-open={open} data-drop={over}>
       <div
+        ref={rowRef}
         className="proj-folder__row"
         onDragOver={onDragOver}
         onDragEnter={onDragOver}
         onDragLeave={() => setOver(false)}
         onDrop={onDrop}
+        onContextMenu={onContextMenu}
+        onKeyDown={onKeyDown}
+        tabIndex={0}
       >
         <button
           type="button"
@@ -115,12 +207,68 @@ function FolderRow({ project, rows }: { project: RawProject; rows: SessionRow[] 
         >
           <ChevronRight className="size-3" strokeWidth={2} aria-hidden />
         </button>
-        <NavLink to={projectPath(id)} className="proj-folder__link" title={name}>
-          <Folder className="size-3.5 shrink-0" strokeWidth={1.75} aria-hidden />
-          <span className="proj-folder__name">{name}</span>
-          <span className="proj-folder__count">{rows.length || ''}</span>
-        </NavLink>
+        {renaming ? (
+          <FolderRenameField
+            name={name}
+            disabled={isPending}
+            onDone={(next) => {
+              setRenaming(false)
+              if (next !== null) rename(next)
+            }}
+          />
+        ) : (
+          <NavLink to={projectPath(id)} className="proj-folder__link" title={name}>
+            <Folder className="size-3.5 shrink-0" strokeWidth={1.75} aria-hidden />
+            <span className="proj-folder__name">{name}</span>
+            <span className="proj-folder__count">{rows.length || ''}</span>
+          </NavLink>
+        )}
         {over ? <span className="proj-folder__drop">{t('projects.folder.drop')}</span> : null}
+        {!renaming ? (
+          <button
+            ref={moreRef}
+            type="button"
+            className="proj-folder__more app-no-drag"
+            aria-label={t('projects.page.more')}
+            aria-haspopup="menu"
+            aria-expanded={menu !== null}
+            tabIndex={-1}
+            onClick={(e) => {
+              e.stopPropagation()
+              const rect = e.currentTarget.getBoundingClientRect()
+              setMenu(menu ? null : { anchor: rect, align: 'end' })
+            }}
+          >
+            <MoreHorizontal className="size-3.5" strokeWidth={2} aria-hidden />
+          </button>
+        ) : null}
+        {menu ? (
+          <PopMenu
+            place={menu}
+            onClose={closeMenu}
+            label={t('projects.menu.label')}
+            triggerRef={moreRef}
+          >
+            <MenuItem
+              icon={Pencil}
+              label={t('projects.page.rename')}
+              onSelect={() => setRenaming(true)}
+            />
+            <MenuItem
+              icon={Trash2}
+              tone="danger"
+              label={t('projects.page.delete')}
+              onSelect={() => setConfirmDelete(true)}
+            />
+          </PopMenu>
+        ) : null}
+        {confirmDelete ? (
+          <DeleteConfirm
+            name={name}
+            onCancel={() => setConfirmDelete(false)}
+            onConfirm={() => remove()}
+          />
+        ) : null}
       </div>
       <AnimatePresence initial={false}>
         {open ? (
@@ -147,6 +295,116 @@ function FolderRow({ project, rows }: { project: RawProject; rows: SessionRow[] 
         ) : null}
       </AnimatePresence>
     </div>
+  )
+}
+
+function MenuItem({
+  icon: Icon,
+  label,
+  onSelect,
+  tone,
+}: {
+  icon: React.ElementType
+  label: string
+  onSelect: () => void
+  tone?: 'danger'
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      className="mac-menu__item"
+      data-tone={tone}
+      onClick={() => {
+        onSelect()
+      }}
+    >
+      <Icon className="size-3.5" strokeWidth={1.75} aria-hidden />
+      <span className="mac-menu__label">{label}</span>
+    </button>
+  )
+}
+
+function DeleteConfirm({
+  name,
+  onCancel,
+  onConfirm,
+}: {
+  name: string
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  return (
+    <div className="proj-alert__overlay" onClick={onCancel}>
+      <div
+        className="proj-alert"
+        role="alertdialog"
+        aria-labelledby="proj-delete-title"
+        aria-describedby="proj-delete-body"
+      >
+        <h2 id="proj-delete-title" className="proj-alert__title">
+          {t('projects.delete.title')}
+        </h2>
+        <p id="proj-delete-body" className="proj-alert__body">
+          <strong>{name}</strong> — {t('projects.delete.body')}
+        </p>
+        <div className="proj-alert__actions">
+          <button type="button" className="mac-button" onClick={onCancel}>
+            {t('projects.delete.cancel')}
+          </button>
+          <button type="button" className="mac-button mac-button--danger" onClick={onConfirm}>
+            {t('projects.delete.confirm')}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function FolderRenameField({
+  name,
+  disabled,
+  onDone,
+}: {
+  name: string
+  disabled: boolean
+  onDone: (next: string | null) => void
+}) {
+  const [draft, setDraft] = useState(name)
+  const ref = useRef<HTMLInputElement>(null)
+  const settled = useRef(false)
+  useEffect(() => {
+    ref.current?.focus()
+    ref.current?.select()
+  }, [])
+  const finish = (next: string | null) => {
+    if (settled.current) return
+    settled.current = true
+    onDone(next)
+  }
+  return (
+    <input
+      ref={ref}
+      className="proj-folder__rename app-no-drag"
+      value={draft}
+      aria-label={t('projects.page.rename')}
+      maxLength={200}
+      spellCheck={false}
+      disabled={disabled}
+      onChange={(e) => setDraft(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          finish(draft)
+        } else if (e.key === 'Escape') {
+          e.preventDefault()
+          e.stopPropagation()
+          finish(null)
+        }
+      }}
+      onBlur={() => finish(draft)}
+      onClick={(e) => e.stopPropagation()}
+    />
   )
 }
 
