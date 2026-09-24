@@ -611,6 +611,20 @@
   color: var(--muted-foreground);
   background: color-mix(in srgb, var(--foreground) 5%, transparent);
   white-space: nowrap;
+  transition:
+    color 120ms ease-out,
+    background-color 120ms ease-out;
+}
+.trd-venue:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 9%, transparent);
+}
+.trd-venue:disabled {
+  opacity: 0.6;
+}
+.trd-venue:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 .trd-venue i {
   width: 5px;

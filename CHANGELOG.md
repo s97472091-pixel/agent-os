@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Desktop: the Trading Desk's portfolio header offers the aggregator as a
+  selector — switch between AgentOS Aggregator and Uniswap in place, each
+  choice carrying its key state and a shortcut into the provider settings,
+  instead of leaving the desk for Settings or the composer. The swap panel
+  follows at once, and its readiness gate still applies.
+
 ## [2026.9.24.post1] - 2026-09-24
 
 ### Fixed

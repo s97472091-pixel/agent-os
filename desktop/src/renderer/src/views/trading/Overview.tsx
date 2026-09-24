@@ -1,12 +1,20 @@
-import { RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { ChevronDown, RefreshCw, Settings2, TrendingDown, TrendingUp } from 'lucide-react'
+import { useRef, useState, type ReactNode } from 'react'
+import { MenuItem, MenuSep, PopMenu } from '~/components/menu/PopMenu'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
 import { shortAge } from '~/lib/relative-time'
 import { allocationSegments, formatPct, formatUsd, pnlTone } from './logic'
 import { Money, Spinner, useCountUp } from './parts'
 import { ProviderMark, providerMark } from './ProviderMark'
-import { providerLabel, type Holding, type ProviderId, type Totals } from './types'
+import {
+  PROVIDERS,
+  providerLabel,
+  type Holding,
+  type ProviderId,
+  type ProviderStatus,
+  type Totals,
+} from './types'
 
 /**
  * The instrument head of the desk: one panel carrying whose wallet this is,
@@ -23,6 +31,10 @@ export function Overview({
   onSync,
   loading,
   provider,
+  providers,
+  switching,
+  onSwitchProvider,
+  onOpenSettings,
   entering,
   head,
   unpricedCount = 0,
@@ -36,6 +48,14 @@ export function Overview({
   loading: boolean
   /** Who routes swaps right now, as a pill beside the sync state. */
   provider?: ProviderId
+  /** Provider facts for the pill's menu, as the composer seat shows them. */
+  providers?: readonly ProviderStatus[]
+  /** A provider switch is in flight. */
+  switching?: boolean
+  /** Move the desk to another swap route, in place. */
+  onSwitchProvider?: (id: ProviderId) => void
+  /** The pill menu's shortcut into the provider settings. */
+  onOpenSettings?: () => void
   /** The mode switch is playing: the value counts up on the same clock. */
   entering?: boolean
   /** Whose value this is: the wallet head, above the figure. */
@@ -95,14 +115,13 @@ export function Overview({
             in the identity line above it. */}
         <div className="trd-hero__tools">
           {provider ? (
-            <span className="trd-venue" data-testid="provider-pill">
-              {providerMark(provider) ? (
-                <ProviderMark id={provider} size={13} />
-              ) : (
-                <i aria-hidden />
-              )}
-              {providerLabel(provider)}
-            </span>
+            <ProviderPill
+              provider={provider}
+              providers={providers}
+              switching={switching}
+              onSwitch={onSwitchProvider}
+              onOpenSettings={onOpenSettings}
+            />
           ) : null}
           <span className="trd-hero__sync" data-live={syncing ? 'true' : undefined}>
             {syncing ? (
@@ -171,6 +190,100 @@ export function Overview({
         </div>
       ) : null}
     </section>
+  )
+}
+
+/**
+ * Which aggregator routes the swaps, changeable right here — the composer
+ * seat's selector in the portfolio head. Picking a route takes effect for
+ * the swap panel at once; the panel's own readiness gate still applies.
+ */
+function ProviderPill({
+  provider,
+  providers,
+  switching,
+  onSwitch,
+  onOpenSettings,
+}: {
+  provider: ProviderId
+  providers?: readonly ProviderStatus[]
+  switching?: boolean
+  onSwitch?: (id: ProviderId) => void
+  onOpenSettings?: () => void
+}) {
+  // The anchor rect is captured on click, so no ref is read during render.
+  const [anchor, setAnchor] = useState<DOMRect | null>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const facts = (id: ProviderId): string => {
+    const row = providers?.find((p) => p.id === id)
+    if (!row) return ''
+    if (row.needsKey) {
+      return row.keyConfigured
+        ? t('trading.seat.provider.keyOk')
+        : t('trading.seat.provider.needsKey')
+    }
+    return t('trading.seat.provider.noKey')
+  }
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="trd-venue app-no-drag"
+        data-testid="provider-pill"
+        aria-haspopup="menu"
+        aria-expanded={anchor !== null}
+        aria-label={t('trading.seat.provider.title')}
+        title={t('trading.seat.provider.title')}
+        disabled={switching}
+        onClick={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect()
+          setAnchor((a) => (a ? null : rect))
+        }}
+      >
+        {providerMark(provider) ? <ProviderMark id={provider} size={13} /> : <i aria-hidden />}
+        {providerLabel(provider)}
+        <ChevronDown className="size-3 opacity-70" strokeWidth={2} aria-hidden />
+      </button>
+      {anchor ? (
+        <PopMenu
+          place={{ anchor, align: 'start' }}
+          triggerRef={triggerRef}
+          onClose={() => setAnchor(null)}
+          label={t('trading.seat.provider.title')}
+        >
+          {PROVIDERS.map((p) => (
+            <MenuItem
+              key={p.id}
+              role="menuitemradio"
+              checked={p.id === provider}
+              mark={<ProviderMark id={p.id} size={13} />}
+              label={p.label}
+              aside={facts(p.id)}
+              onSelect={() => {
+                setAnchor(null)
+                if (p.id !== provider) onSwitch?.(p.id)
+              }}
+            />
+          ))}
+          {onOpenSettings ? (
+            <>
+              <MenuSep />
+              <MenuItem
+                icon={Settings2}
+                // An empty mark slot: the labels in this menu line up in one column.
+                mark={<span aria-hidden />}
+                label={t('trading.seat.provider.settings')}
+                onSelect={() => {
+                  setAnchor(null)
+                  onOpenSettings()
+                }}
+              />
+            </>
+          ) : null}
+        </PopMenu>
+      ) : null}
+    </>
   )
 }
 

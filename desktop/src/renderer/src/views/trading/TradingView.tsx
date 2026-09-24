@@ -32,6 +32,7 @@ import { ChainMark } from './ChainMark'
 import { Spinner } from './parts'
 import { PriceChart } from './PriceChart'
 import { SwapPanel, type SwapPrefill } from './SwapPanel'
+import { useSwitchProvider } from './useSwitchProvider'
 import {
   CHAINS,
   DEFAULT_PROVIDER,
@@ -229,6 +230,7 @@ function Desk({
   const [highlight, setHighlight] = useState<string | null>(null)
   const [railWanted, setRailWanted] = useRailPreference()
   const openSettings = useUi((s) => s.openSettings)
+  const switchProvider = useSwitchProvider()
   const now = useNow(30_000)
   const location = useLocation()
   const navigate = useNavigate()
@@ -410,6 +412,10 @@ function Desk({
             loading={portfolio.isPending}
             onSync={onSync}
             provider={provider}
+            providers={status.data?.providers ?? []}
+            switching={switchProvider.switching}
+            onSwitchProvider={switchProvider.switchTo}
+            onOpenSettings={() => openSettings('trading')}
             entering={entering}
             head={
               <WalletHead

@@ -2,7 +2,7 @@ import { fireEvent, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { Overview } from './Overview'
 import { holding, renderDesk, USDC } from './test-utils'
-import type { Totals } from './types'
+import type { ProviderId, ProviderStatus, Totals } from './types'
 
 const TOTALS: Totals = {
   valueUsd: 1240.5,
@@ -110,5 +110,81 @@ describe('Overview · the desk head', () => {
   it('says nothing about unpriced positions when every one has a price', () => {
     render({}, { unpricedCount: 0 })
     expect(screen.queryByTestId('portfolio-unpriced')).toBeNull()
+  })
+})
+
+const PROVIDER_STATUS: ProviderStatus[] = [
+  {
+    id: 'aggregator',
+    label: 'AgentOS Aggregator',
+    needsKey: false,
+    keyConfigured: true,
+    healthy: null,
+  },
+  { id: 'uniswap', label: 'Uniswap', needsKey: true, keyConfigured: false, healthy: null },
+]
+
+// The venue pill used to be read-only; changing the aggregator meant leaving
+// the desk for Settings or the composer. It is the same selector the composer
+// seat offers, in place: pick a route, the swap panel follows.
+describe('Overview · the provider pill', () => {
+  function renderPill(
+    props: {
+      provider?: ProviderId
+      switching?: boolean
+      onSwitchProvider?: (id: ProviderId) => void
+      onOpenSettings?: () => void
+    } = {},
+  ) {
+    renderDesk(
+      <Overview
+        totals={TOTALS}
+        holdings={[]}
+        syncing={false}
+        lastSyncAt={null}
+        now={Date.now()}
+        onSync={vi.fn()}
+        loading={false}
+        provider={props.provider ?? 'aggregator'}
+        providers={PROVIDER_STATUS}
+        switching={props.switching}
+        onSwitchProvider={props.onSwitchProvider}
+        onOpenSettings={props.onOpenSettings}
+      />,
+    )
+  }
+
+  it('switches the route in place, with each choice explained', () => {
+    const onSwitch = vi.fn()
+    renderPill({ provider: 'aggregator', onSwitchProvider: onSwitch, onOpenSettings: vi.fn() })
+    const pill = screen.getByTestId('provider-pill')
+    expect(pill).toHaveTextContent('AgentOS Aggregator')
+    expect(pill).toHaveAttribute('aria-haspopup', 'menu')
+    fireEvent.click(pill)
+    const uniswap = screen.getByRole('menuitemradio', { name: /^Uniswap/ })
+    expect(uniswap).toHaveTextContent('needs an API key')
+    expect(screen.getByRole('menuitemradio', { name: /AgentOS Aggregator/ })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
+    fireEvent.click(uniswap)
+    expect(onSwitch).toHaveBeenCalledWith('uniswap')
+    // Picking the active one is a no-op.
+    fireEvent.click(screen.getByTestId('provider-pill'))
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /AgentOS Aggregator/ }))
+    expect(onSwitch).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the settings shortcut in the menu', () => {
+    const onOpenSettings = vi.fn()
+    renderPill({ onOpenSettings })
+    fireEvent.click(screen.getByTestId('provider-pill'))
+    fireEvent.click(screen.getByRole('menuitem', { name: /Provider settings/ }))
+    expect(onOpenSettings).toHaveBeenCalled()
+  })
+
+  it('rests disabled while a switch is in flight', () => {
+    renderPill({ switching: true, onSwitchProvider: vi.fn() })
+    expect(screen.getByTestId('provider-pill')).toBeDisabled()
   })
 })
