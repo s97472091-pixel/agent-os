@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Desktop: the chat header no longer repeats the session title. Session actions
+  are right-aligned in the header row, and the run-state indicator stays on the
+  left (#3387).
+
 ## [2026.9.24.post1] - 2026-09-24
 
 ### Fixed

@@ -31,6 +31,7 @@ import '@/i18n/en/chat'
 import { Composer, type ComposerHandle } from '~/components/composer/Composer'
 import { Button } from '~/components/ui/button'
 import { sessionPath } from '~/components/sidebar/SessionList'
+import { isPlaceholderSessionName } from '~/lib/session-name'
 import { t } from '~/i18n'
 import { rememberLastSession } from '~/lib/last-session'
 import { ease, spring } from '~/lib/motion'
@@ -38,7 +39,6 @@ import { useGateway } from '~/stores/gateway'
 import { useLive } from '~/stores/live'
 import { useSettings } from '~/stores/settings'
 import { useUi } from '~/stores/ui'
-import { isPlaceholderSessionName, shownSessionName } from '~/lib/session-name'
 import { configuredProvider } from '@/views/setup/logic'
 import { useConfigSnapshot } from '~/views/settings/use-snapshot'
 import { ProjectChip } from './ProjectChip'
@@ -287,12 +287,10 @@ function ConnectedChat({ desk }: { desk: DeskProps | null }) {
 
   const enterToSend = useSettings((s) => s.settings.general.enterToSend)
 
-  // Session display name (sessions.resolve), re-read when the run settles.
-  // The titler names a fresh session a few seconds after the first turn and
-  // broadcasts the rename; while the name is still a placeholder we also
-  // re-read it on a short schedule, so a missed event cannot leave "New
-  // session" on screen for a chat that has a name.
-  const [sessionName, setSessionName] = useState('')
+  // Session display name is no longer shown in the header, but the chat still
+  // resolves it and renames the session from placeholder until the gateway
+  // broadcasts a real name.
+  const [, setSessionName] = useState('')
   const runStatus = runState.status
   useEffect(() => {
     let cancelled = false
@@ -652,9 +650,6 @@ function ConnectedChat({ desk }: { desk: DeskProps | null }) {
 
   // Reply notifications for this and every other session come from the
   // shell's session-run watcher (lib/use-notifications), not from here.
-  const title = desk
-    ? shownSessionName(sessionName) || t('trading.chat.title')
-    : shownSessionName(sessionName) || t('chat.untitled')
 
   return (
     <div
@@ -665,47 +660,48 @@ function ConnectedChat({ desk }: { desk: DeskProps | null }) {
     >
       {docked ? (
         <div className="chat-desktop-header">
-          <h1 className="chat-desktop-header__title" title={sessionKey}>
-            {title}
-          </h1>
-          <ProjectChip sessionKey={sessionKey} />
-          {runState.status !== 'idle' ? (
-            <span className="chat-desktop-header__state" data-tone={runTone(runState.status)}>
-              {runState.label}
-            </span>
-          ) : null}
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={desk ? t('trading.chat.fresh') : t('chat.newChat')}
-            title={
-              desk
-                ? t('trading.chat.fresh')
-                : `${t('chat.newChat')} (${formatCombo(NEW_CHAT_COMBO)})`
-            }
-            onClick={desk ? desk.onStartFresh : startNewChat}
-            data-testid={desk ? 'chat-fresh' : undefined}
-          >
-            <SquarePen className="size-4 text-muted-foreground" strokeWidth={1.75} aria-hidden />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={t('chat.reset')}
-            title={t('chat.reset')}
-            onClick={resetSession}
-          >
-            <RotateCcw className="size-4 text-muted-foreground" strokeWidth={1.75} aria-hidden />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={t('chat.export')}
-            title={t('chat.export')}
-            onClick={onExportMarkdown}
-          >
-            <Download className="size-4 text-muted-foreground" strokeWidth={1.75} aria-hidden />
-          </Button>
+          <div className="chat-desktop-header__left">
+            {runState.status !== 'idle' ? (
+              <span className="chat-desktop-header__state" data-tone={runTone(runState.status)}>
+                {runState.label}
+              </span>
+            ) : null}
+          </div>
+          <div className="chat-desktop-header__actions">
+            <ProjectChip sessionKey={sessionKey} />
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={desk ? t('trading.chat.fresh') : t('chat.newChat')}
+              title={
+                desk
+                  ? t('trading.chat.fresh')
+                  : `${t('chat.newChat')} (${formatCombo(NEW_CHAT_COMBO)})`
+              }
+              onClick={desk ? desk.onStartFresh : startNewChat}
+              data-testid={desk ? 'chat-fresh' : undefined}
+            >
+              <SquarePen className="size-4 text-muted-foreground" strokeWidth={1.75} aria-hidden />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={t('chat.reset')}
+              title={t('chat.reset')}
+              onClick={resetSession}
+            >
+              <RotateCcw className="size-4 text-muted-foreground" strokeWidth={1.75} aria-hidden />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={t('chat.export')}
+              title={t('chat.export')}
+              onClick={onExportMarkdown}
+            >
+              <Download className="size-4 text-muted-foreground" strokeWidth={1.75} aria-hidden />
+            </Button>
+          </div>
         </div>
       ) : null}
 

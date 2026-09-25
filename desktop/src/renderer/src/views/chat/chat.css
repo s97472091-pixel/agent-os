@@ -93,6 +93,18 @@
   min-height: 32px;
   padding: 0 16px 6px 20px;
 }
+.chat-desktop-header__left {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+}
+.chat-desktop-header__actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
 .chat-desktop-header__title {
   min-width: 0;
   flex: 1 1 auto;
@@ -107,7 +119,6 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  margin-right: 6px;
   font-size: 11.5px;
   color: var(--muted-foreground);
 }
