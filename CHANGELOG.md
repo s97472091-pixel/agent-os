@@ -64,6 +64,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   activity id to its conversation and never evicted, so a long-running bot
   grew one entry per message sent for the life of the process. It is now a
   bounded LRU registry (#3052).
+- `video-merger` skill: `merge()` and `_merge_single_chunk()` now clamp
+  `transition_duration` to at most half of the total/chunk duration and omit
+  the `fade`/`afade` filters when `transition_duration <= 0`. Previously,
+  short clips could produce negative fade start timestamps or zero-duration
+  fade filters, causing FFmpeg filter parsing errors (#3259).
 
 - Approval queue: a process that shares a state directory with a live gateway
   but has no approval surface of its own can no longer queue approvals there.

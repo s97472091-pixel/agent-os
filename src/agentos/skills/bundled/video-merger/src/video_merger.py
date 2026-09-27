@@ -223,17 +223,23 @@ class VideoMerger:
             if out_dir:
                 os.makedirs(out_dir, exist_ok=True)
 
+            effective_transition = min(max(0.0, transition_duration), total_duration / 2.0)
+            vf_filters = [f"scale={resolution},fps={fps},format=yuv420p"]
+            af_filters: list[str] = []
+            if effective_transition > 0.0:
+                fade_out_st = total_duration - effective_transition
+                vf_filters.append(f"fade=t=in:st=0:d={effective_transition}")
+                vf_filters.append(f"fade=t=out:st={fade_out_st}:d={effective_transition}")
+                if has_audio:
+                    af_filters.append(f"afade=t=in:st=0:d={effective_transition}")
+                    af_filters.append(f"afade=t=out:st={fade_out_st}:d={effective_transition}")
+
             cmd_final = [
                 self.ffmpeg_path, "-y", "-i", temp_raw,
-                "-vf", (f"scale={resolution},fps={fps},format=yuv420p,"
-                        f"fade=t=in:st=0:d={transition_duration},"
-                        f"fade=t=out:st={total_duration-transition_duration}:d={transition_duration}"),
+                "-vf", ",".join(vf_filters),
             ]
-            if has_audio:
-                cmd_final += [
-                    "-af", (f"afade=t=in:st=0:d={transition_duration},"
-                            f"afade=t=out:st={total_duration-transition_duration}:d={transition_duration}"),
-                ]
+            if af_filters:
+                cmd_final += ["-af", ",".join(af_filters)]
             cmd_final += ["-c:v", "h264", "-crf", str(crf), "-preset", preset]
             if has_audio:
                 cmd_final += ["-c:a", "aac", "-ar", "44100", "-ac", "2"]
@@ -370,17 +376,23 @@ class VideoMerger:
 
             # 统一参数+添加转场
             has_audio = self._has_audio_stream(temp_raw)
+            effective_transition = min(max(0.0, transition_duration), chunk_duration / 2.0)
+            vf_filters = [f"scale={resolution},fps={fps},format=yuv420p"]
+            af_filters: list[str] = []
+            if effective_transition > 0.0:
+                fade_out_st = chunk_duration - effective_transition
+                vf_filters.append(f"fade=t=in:st=0:d={effective_transition}")
+                vf_filters.append(f"fade=t=out:st={fade_out_st}:d={effective_transition}")
+                if has_audio:
+                    af_filters.append(f"afade=t=in:st=0:d={effective_transition}")
+                    af_filters.append(f"afade=t=out:st={fade_out_st}:d={effective_transition}")
+
             cmd_final = [
                 self.ffmpeg_path, "-y", "-i", temp_raw,
-                "-vf", (f"scale={resolution},fps={fps},format=yuv420p,"
-                        f"fade=t=in:st=0:d={transition_duration},"
-                        f"fade=t=out:st={chunk_duration-transition_duration}:d={transition_duration}"),
+                "-vf", ",".join(vf_filters),
             ]
-            if has_audio:
-                cmd_final += [
-                    "-af", (f"afade=t=in:st=0:d={transition_duration},"
-                            f"afade=t=out:st={chunk_duration-transition_duration}:d={transition_duration}"),
-                ]
+            if af_filters:
+                cmd_final += ["-af", ",".join(af_filters)]
             cmd_final += ["-c:v", "h264", "-crf", str(crf), "-preset", preset]
             if has_audio:
                 cmd_final += ["-c:a", "aac", "-ar", "44100", "-ac", "2"]
