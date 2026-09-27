@@ -323,9 +323,13 @@ class Vault:
             keys: dict[str, bytes] = {}
             for record in records:
                 path = self.keystore_path(record.address)
+                if not path.is_file():
+                    continue
                 keystore = json.loads(path.read_text(encoding="utf-8"))
                 keys[record.key] = self._decrypt(keystore, password)
             for record in records:
+                if record.key not in keys:
+                    continue
                 _write_private(
                     self.keystore_path(record.address),
                     json.dumps(self._encrypt(keys[record.key], new_password)),
