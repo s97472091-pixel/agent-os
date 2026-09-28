@@ -115,12 +115,26 @@ _PREFIX_PATTERNS: tuple[str, ...] = (
 #: a key — masking it corrupts the blob on a read-then-write round trip.
 _PREFIX_RE = re.compile(r"(?<![A-Za-z0-9])(?:" + "|".join(_PREFIX_PATTERNS) + ")")
 
-#: ``https://user:token@host`` — userinfo in a web URL is a credential the
-#: same way a DSN password is. Redaction-only: the payload guard keeps its
-#: narrower connection-string vocabulary.
-#: The username is optional (``*``, not ``+``): ``https://:token@host`` is a
-#: valid spelling and carries the credential in the same place.
-_URL_USERINFO_RE = re.compile(r"(https?://[^:\s/]*:)([^@\s/]+)(@)", re.IGNORECASE)
+#: ``<scheme>://[user]:token@host`` — userinfo in a URL is a credential the
+#: same way a DSN password is, whatever the scheme in front of it. Matched
+#: structurally, not against a scheme list, because a list only ever covers
+#: the schemes someone thought of. ``ws``/``wss`` (a gateway URL with basic
+#: auth), ``ftp``, ``sftp``, ``ssh``, ``smtp``, ``ldap`` and any database
+#: scheme outside the five in ``_DB_CONNSTR_RE`` were all handed to the model
+#: verbatim (#3432).
+#:
+#: The scheme start is anchored on the left with a negative lookbehind so a
+#: long run of scheme-like characters (a base64 blob, a hash, minified output)
+#: does not become a quadratic scan: every position in ``[a-z][a-z0-9+.-]*``
+#: would otherwise be tried, and one URL anywhere in the body passes the
+#: ``://`` gate. With the anchor a 1 MB alphanumeric run stays fast.
+#:
+#: The username is optional (``*``, not ``+``): ``https://:token@host`` is
+#: a valid spelling and carries the credential in the same place (#3367).
+_URL_USERINFO_RE = re.compile(
+    r"(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*://[^:@\s/]*:)([^@\s/]+)(@)",
+    re.IGNORECASE,
+)
 
 _PEM_PRIVATE_KEY_RE = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----", re.IGNORECASE)
 _PEM_PRIVATE_KEY_BLOCK_RE = re.compile(

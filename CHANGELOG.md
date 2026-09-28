@@ -25,6 +25,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   things the chat does not show on its own.
 
 ### Fixed
+- Security: URL userinfo (`scheme://user:password@host`) was masked only for
+  `http`/`https`, so ``ws``/``wss`` (gateway basic auth), ``ftp``, ``sftp``,
+  ``ssh``, ``smtp``, ``ldap``, ``clickhouse`` and ``mariadb`` URLs — and any
+  future scheme — reached the model verbatim. `_URL_USERINFO_RE` now matches
+  the structure for any scheme, with the scheme start anchored so long
+  alphanumeric runs do not become a quadratic scan (#3432).
 - Security: secret redaction and the payload guard matched connection strings
   against a scheme list that carried `redis` and `amqp` but not their TLS
   spellings, so `rediss://user:password@host` (what `REDIS_TLS_URL` holds) and
